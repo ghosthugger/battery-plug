@@ -1,0 +1,217 @@
+esphome:
+  name: athom-smart-plug-v3
+  name_add_mac_suffix: true
+  friendly_name: Athom Plug V3
+  comment: Local battery charging controller
+  min_version: 2026.10.0
+  on_boot:
+    priority: 600
+    then:
+      - switch.turn_off: relay
+
+esp32:
+  board: esp32-c3-devkitm-1
+  flash_size: 4MB
+  framework:
+    type: esp-idf
+    version: recommended
+    sdkconfig_options:
+      CONFIG_MBEDTLS_CERTIFICATE_BUNDLE: y
+      CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL: y
+      # One BMS and small HTTP transfers: avoid reserving buffers for a gateway.
+      CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM: "6"
+      CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM: "16"
+      CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM: "16"
+      # Keep full-size incoming record support and certificate verification,
+      # but allocate TLS buffers only while needed rather than reserving 20 KB.
+      CONFIG_MBEDTLS_DYNAMIC_BUFFER: y
+      CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA: y
+      CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT: y
+      CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE: n
+      CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN: "1024"
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [charging_controller]
+
+preferences:
+  flash_write_interval: 1s
+logger:
+  baud_rate: 0
+  level: INFO
+  task_log_buffer_size: 0
+wifi:
+  ap: {}
+mdns:
+captive_portal:
+web_server:
+  version: 3
+  port: 80
+  local: true
+  log: false
+  sorting_groups:
+    - id: charging_settings
+      name: Charging settings
+      sorting_weight: -100
+http_request:
+  verify_ssl: true
+  timeout: 8s
+
+ota:
+  - platform: esphome
+    on_begin:
+      - lambda: id(controller).prepare_ota();
+  - platform: web_server
+    on_begin:
+      - lambda: id(controller).prepare_ota();
+
+esp32_ble:
+  max_connections: 1
+esp32_ble_tracker:
+  scan_parameters:
+    active: false
+    interval: 320ms
+    window: 30ms
+ble_client:
+  - mac_address: 40:17:10:01:3B:B4
+    id: daly_client
+
+charging_controller:
+  # Disabled by measured memory limits; retain the detailed 24-hour ring.
+  daily_history_days: 0
+  id: controller
+  ble_client_id: daly_client
+  relay_id: relay
+  power_id: power_sensor
+  clock_id: sntp_time
+  target_id: target_battery_percentage
+  finish_id: charging_finish_time
+  status_id: charging_settings_status
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Stockholm
+    update_interval: 6h
+
+uart:
+  id: uart_cse7766
+  rx_pin: GPIO20
+  baud_rate: 4800
+  data_bits: 8
+  stop_bits: 1
+  parity: EVEN
+
+sensor:
+  - platform: cse7766
+    current:
+      name: Current
+      filters:
+        - throttle_average: 10s
+      on_value_range:
+        - above: 12
+          then:
+            - lambda: id(controller).overcurrent();
+    voltage:
+      name: Voltage
+      filters:
+        - throttle_average: 10s
+    power:
+      id: power_sensor
+      name: Power
+      filters:
+        - throttle_average: 10s
+  - platform: wifi_signal
+    name: WiFi Signal dB
+    update_interval: 60s
+
+switch:
+  - platform: gpio
+    id: relay
+    internal: true
+    pin: GPIO5
+    restore_mode: ALWAYS_OFF
+  - platform: template
+    name: Switch
+    lambda: return id(relay).state;
+    turn_on_action:
+      - lambda: id(controller).request_mode(2);
+    turn_off_action:
+      - lambda: id(controller).request_mode(0);
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO3
+      mode: INPUT_PULLUP
+      inverted: true
+    id: physical_button
+    internal: true
+    filters:
+      - delayed_on_off: 20ms
+    on_click:
+      min_length: 30ms
+      max_length: 1s
+      then:
+        - lambda: id(controller).button_toggle();
+
+light:
+  - platform: status_led
+    name: Status LED
+    pin:
+      number: GPIO6
+      inverted: true
+
+button:
+  - platform: restart
+    name: Restart
+  - platform: safe_mode
+    name: Safe Mode
+
+number:
+  - platform: template
+    id: target_battery_percentage
+    name: Target battery percentage
+    unit_of_measurement: "%"
+    min_value: 0
+    max_value: 100
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 90
+    web_server:
+      sorting_group_id: charging_settings
+      sorting_weight: 10
+
+datetime:
+  - platform: template
+    id: charging_finish_time
+    name: Finish time (Stockholm)
+    type: time
+    optimistic: true
+    restore_value: true
+    initial_value: "07:00:00"
+    web_server:
+      sorting_group_id: charging_settings
+      sorting_weight: 20
+
+text_sensor:
+  - platform: template
+    id: charging_settings_status
+    name: Charging settings status
+    update_interval: never
+    web_server:
+      sorting_group_id: charging_settings
+      sorting_weight: 30
+  - platform: template
+    name: Charging dashboard
+    lambda: return {"Open /charging for controls, prices and graphs"};
+    update_interval: 60s
+  - platform: wifi_info
+    ip_address:
+      name: IP Address
+    mac_address:
+      name: Mac Address
