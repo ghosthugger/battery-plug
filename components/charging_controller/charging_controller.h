@@ -2,6 +2,7 @@
 #include <atomic>
 #include <mutex>
 
+#include "esphome/core/defines.h"
 #include "charging_core.h"
 #include "esphome/components/ble_client/ble_client.h"
 #include "esphome/components/datetime/time_entity.h"
@@ -12,7 +13,6 @@
 #include "esphome/components/time/real_time_clock.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 #include "esphome/core/component.h"
-#include "esphome/core/defines.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs.h"
@@ -74,6 +74,7 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
   charging::DalyFrames frames_{};
   bool ready_{false}, connected_{false}, ota_{false}, overcurrent_{false}, plan_dirty_{true},
       storage_ok_{true}, network_enabled_{false}, had_bms_{false}, last_output_{false};
+  float reserve_threshold_{5}, reserve_recovery_{10};
   float load_w_{0}, gross_charge_w_{0}, fx_{0}, meter_w_{charging::UNKNOWN};
   uint32_t fx_time_{0}, fetch_now_{0};
   uint16_t history_written_{0};

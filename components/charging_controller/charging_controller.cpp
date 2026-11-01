@@ -105,6 +105,15 @@ void Controller::restore_() {
     settings_ = s.settings;
     control_.mode = s.automatic ? Mode::AUTO : Mode::OFF;
   }
+  float reserve = 5;
+  if (load_record(nvs_, "reserve", reserve) && std::isfinite(reserve) && reserve >= 0 && reserve <= 95)
+    reserve_threshold_ = reserve;
+  reserve_recovery_ = reserve_threshold_ + 5; // Preserve the earlier release level on upgrade.
+  float recovery;
+  if (load_record(nvs_, "reserve_end", recovery) && valid_reserve_settings(reserve_threshold_, recovery))
+    reserve_recovery_ = recovery;
+  load_record(nvs_, "reserve_active", control_.reserve_active);
+  if (control_.mode == Mode::OFF || reserve_threshold_ == 0) control_.reserve_active = false;
   char key[12];
   for (size_t i = 0; i < 24; ++i) {
     Hour h;
@@ -189,6 +198,9 @@ void Controller::sync_settings_() {
   }
 }
 void Controller::persist_settings_() {
+  storage_ok_ &= save_record(nvs_, "reserve", reserve_threshold_);
+  storage_ok_ &= save_record(nvs_, "reserve_end", reserve_recovery_);
+  storage_ok_ &= save_record(nvs_, "reserve_active", control_.reserve_active);
   storage_ok_ &=
       save_record(nvs_, "settings", StoredSettings{settings_, control_.mode == Mode::AUTO ? 1U : 0U});
   if (nvs_) storage_ok_ &= nvs_commit(nvs_) == ESP_OK;
@@ -322,7 +334,12 @@ void Controller::tick_() {
     plan_dirty_ = false;
     if (control_.mode == Mode::AUTO && !cycle_deadline_) cycle_deadline_ = plan_.deadline;
   }
-  bool desired = control_.evaluate(settings_, in, plan_, prices_.data());
+  bool was_reserve = control_.reserve_active;
+  bool desired = control_.evaluate(settings_, in, plan_, prices_.data(), reserve_threshold_, reserve_recovery_);
+  if (was_reserve != control_.reserve_active) {
+    storage_ok_ &= save_record(nvs_, "reserve_active", control_.reserve_active);
+    if (nvs_) storage_ok_ &= nvs_commit(nvs_) == ESP_OK;
+  }
   if (ota_) {
     desired = false;
     control_.reason = Reason::OTA;
@@ -544,9 +561,12 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
   }
   if (r->method() == HTTP_POST && u == "/charging/api/settings") {
     Settings s;
+    float reserve, recovery;
     {
       std::lock_guard<std::recursive_mutex> lock(mutex_);
       s = settings_;
+      reserve = reserve_threshold_;
+      recovery = reserve_recovery_;
     }
     auto read = [&](const char* key, float& dest) {
       if (!r->hasArg(key)) return true;
@@ -557,7 +577,9 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
       dest = f;
       return true;
     };
-    bool valid = read("target", s.target) && read("ceiling", s.ceiling) &&
+    bool valid = read("reserve_threshold", reserve) && read("reserve_recovery", recovery) &&
+                 valid_reserve_settings(reserve, recovery) &&
+                 read("target", s.target) && read("ceiling", s.ceiling) &&
                  read("capacity_kwh", s.capacity_kwh) && read("charger_w", s.charger_w) &&
                  read("efficiency", s.efficiency);
     if (r->hasArg("finish")) {
@@ -575,9 +597,12 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
       r->send(400, "application/json", "{\"error\":\"Invalid settings\"}");
       return;
     }
-    defer([this, s] {
+    defer([this, s, reserve, recovery] {
       std::lock_guard<std::recursive_mutex> lock(mutex_);
       settings_ = s;
+      reserve_threshold_ = reserve;
+      reserve_recovery_ = recovery;
+      if (reserve == 0) control_.reserve_active = false;
       auto c = target_->make_call();
       c.set_value(s.target);
       c.perform();
@@ -627,7 +652,8 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            "\"capacity_kwh\":%.2f,\"charger_w\":%.0f,\"efficiency\":%.3f,\"deadline\":%u,\"horizon\":%u,"
            "\"estimated_finish\":%u,\"achievable\":%.1f,\"unlikely\":%s,\"provisional\":%s,\"load_w\":%.1f,"
            "\"fetching\":%s,\"price_error\":\"%s\",\"storage_ok\":%s,\"free_heap\":%u,\"largest_block\":%u,"
-           "\"min_heap\":%u,\"min_block\":%u,\"uptime\":%u,\"history_days\":%u}",
+           "\"min_heap\":%u,\"min_block\":%u,\"uptime\":%u,\"history_days\":%u,"
+           "\"reserve_threshold\":%.1f,\"reserve_recovery\":%.1f,\"reserve_active\":%s}",
            in.now,
            control_.mode == Mode::AUTO  ? "auto"
            : control_.mode == Mode::NOW ? "now"
@@ -646,7 +672,8 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            plan_.provisional ? "true" : "false", double(load_w_), fetching_.load() ? "true" : "false",
            fetch_error_, storage_ok_ ? "true" : "false", unsigned(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
            unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)), min_heap_, min_block_,
-           millis() / 1000, unsigned(RETAINED_DAYS));
+           millis() / 1000, unsigned(RETAINED_DAYS), double(reserve_threshold_),
+           double(reserve_recovery_), control_.reserve_active ? "true" : "false");
   lock.unlock();  // Never let a slow HTTP client block relay supervision.
   r->send(200, "application/json", b);
 }

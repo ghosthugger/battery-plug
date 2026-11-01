@@ -31,7 +31,8 @@ enum class Reason : uint8_t {
   DEADLINE,
   OVERCURRENT,
   OTA,
-  COOLDOWN
+  COOLDOWN,
+  LOW_BATTERY
 };
 inline const char* reason_text(Reason r) {
   static const char* names[] = {"Off",
@@ -48,7 +49,8 @@ inline const char* reason_text(Reason r) {
                                 "Deadline reached",
                                 "Overcurrent protection",
                                 "Firmware update in progress",
-                                "Waiting for switch cooldown"};
+                                "Waiting for switch cooldown",
+                                "Low battery: restoring mains"};
   return names[static_cast<unsigned>(r)];
 }
 struct Settings {
@@ -61,6 +63,10 @@ inline bool valid_settings(const Settings& s) {
          s.capacity_kwh >= 0.1f && s.capacity_kwh <= 100 && std::isfinite(s.charger_w) && s.charger_w >= 10 &&
          s.charger_w <= 2500 && std::isfinite(s.efficiency) && s.efficiency >= 0.1f && s.efficiency <= 1 &&
          s.hour < 24 && s.minute < 60;
+}
+inline bool valid_reserve_settings(float start, float stop) {
+  return std::isfinite(start) && std::isfinite(stop) && start >= 0 && start <= 95 &&
+         stop > start && stop <= 100;
 }
 struct Price {
   uint32_t start{0};
@@ -363,28 +369,38 @@ class Control {
  public:
   Mode mode{Mode::OFF};
   Reason reason{Reason::OFF};
-  bool on{false}, target_latched{false};
+  bool on{false}, target_latched{false}, reserve_active{false};
   uint32_t last_switch{0}, manual_deadline{0}, cycle_deadline{0};
   bool cycle_met{false};
   void set_mode(Mode value, uint32_t now, const Settings& s) {
     mode = value;
     target_latched = false;
     manual_deadline = value == Mode::NOW ? next_deadline(now, s.hour, s.minute) : 0;
-    if (value == Mode::OFF) on = false;
+    if (value == Mode::OFF) { on = false; reserve_active = false; }
   }
-  bool evaluate(const Settings& s, const Inputs& in, const Plan& p, const Price* prices) {
+  bool evaluate(const Settings& s, const Inputs& in, const Plan& p, const Price* prices,
+                float reserve_threshold = 0, float reserve_recovery = 10) {
+    if (mode == Mode::OFF || reserve_threshold <= 0 ||
+        !valid_reserve_settings(reserve_threshold, reserve_recovery)) reserve_active = false;
+    else if (in.bms_fresh && std::isfinite(in.soc) && in.soc >= 0 && in.soc <= 100) {
+      if (in.soc <= reserve_threshold) reserve_active = true;
+      else if (in.soc >= reserve_recovery) reserve_active = false;
+    }
     bool want = false, immediate = true;
     if (mode == Mode::OFF)
       reason = Reason::OFF;
-    else if (!in.clock_ok)
+    else if (!in.clock_ok && !reserve_active)
       reason = Reason::CLOCK;
-    else if (!in.bms_fresh || !std::isfinite(in.soc))
+    else if (!in.bms_fresh || !std::isfinite(in.soc) || in.soc < 0 || in.soc > 100)
       reason = Reason::BMS;
     else if (!in.meter_fresh)
       reason = Reason::METER;
     else if (in.fault)
       reason = Reason::FAULT;
-    else if (mode == Mode::NOW && in.now >= manual_deadline) {
+    else if (reserve_active) {
+      want = true;
+      reason = Reason::LOW_BATTERY;
+    } else if (mode == Mode::NOW && in.now >= manual_deadline) {
       reason = Reason::DEADLINE;
       mode = Mode::OFF;
     } else {

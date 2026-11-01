@@ -15,8 +15,8 @@ The agreed plan, including the description of the original state, is saved in
 
 ## Charging controls
 
-The release is installed with **Off** selected. Review the live readings and
-battery capacity before choosing **Automatic**.
+Choose **Automatic** to enable scheduled charging and low-battery recovery.
+**Off** prevents automatic starts, including low-battery recovery.
 
 | Mode | Behavior |
 | --- | --- |
@@ -30,6 +30,17 @@ control page. Capacity, charger rating and efficiency are planning estimates;
 SOC feedback determines stopping. Simultaneous loads are estimated from BMS
 current, and the plan is recalculated every minute. After reaching the target,
 automatic top-ups re-arm at two percentage points below it.
+
+Low-battery mains recovery defaults to **5%**. In Automatic or Charge now, SOC
+at or below the configurable threshold immediately restores mains and charging,
+regardless of price, target, deadline or clock synchronization. Recovery remains
+active until SOC reaches the configurable recovery stop percentage (default 10%), then
+normal control resumes. The recovery stop must be above the start threshold and
+at most 100%. Both settings and the recovery state survive restart. Set
+`reserve_threshold` to 0 to disable it (allowed range 0–95%). Explicit Off and
+existing BMS, meter, overcurrent and OTA stops remain authoritative. This can buy
+expensive electricity; it cannot guarantee continuity if mains or telemetry is
+lost, the BMS prohibits charging, or the load exceeds available charging power.
 
 A short physical button press stops an active charge or requests Charge now.
 The switch on the diagnostics page uses the same controller; it cannot bypass
@@ -50,11 +61,12 @@ Gridio's raw EUR/MWh values are converted using Elklocka's calculation:
 Prices and the ceiling exclude supplier and grid charges. Displayed costs are
 energy-price estimates, not a complete bill or a claimed saving. Negative prices
 are supported. Unknown prices remain unknown; unpublished tomorrow periods are
-not guessed. Automatic mode may miss the target rather than exceed the ceiling.
+not guessed. Ordinary automatic charging may miss the target rather than exceed the ceiling;
+low-battery recovery explicitly overrides that ceiling.
 Valid cached intervals remain usable during an internet outage.
 
 The controller polls the BMS every ten seconds and stops for a BMS reading older
-than 60 seconds, stale/invalid power data (30 seconds), invalid clock, a BMS
+than 60 seconds, stale/invalid power data (30 seconds), invalid clock outside low-battery recovery, a BMS
 charge prohibition or the plug's overcurrent latch. Off, target, fault, deadline
 and price-limit stops override the two-minute switch cooldown. The BMS's own
 settings and MOSFET configuration are never changed. The charger's and BMS's
@@ -92,8 +104,8 @@ All routes are relative to `/charging/api/`:
 
 | Method | Route | Result |
 | --- | --- | --- |
-| GET | `status` | Live battery/meter/price state, settings, planning reasons, connectivity and memory diagnostics. |
-| POST | `settings` | Form-encoded partial settings: `target`, `finish` (`HH:MM`), `ceiling`, `capacity_kwh`, `charger_w`, `efficiency`. |
+| GET | `status` | Live state and settings, including `reserve_threshold`, `reserve_recovery`, `reserve_active`, planning reasons, connectivity and memory diagnostics. |
+| POST | `settings` | Form-encoded partial settings: `target`, `finish` (`HH:MM`), `ceiling`, `capacity_kwh`, `charger_w`, `efficiency`, `reserve_threshold`, `reserve_recovery`. |
 | POST | `mode` | Form field `mode=off`, `auto` or `now`. |
 | GET | `schedule` | Published price periods and selected charging seconds. |
 | GET | `history` | Bounded 24-hour aggregates, streamed in chunks. |

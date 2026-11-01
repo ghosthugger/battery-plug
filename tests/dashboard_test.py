@@ -14,7 +14,7 @@ state = dict(now=NOW, mode='off', reason='Off', relay=False, soc=72.3, voltage=1
              horizon=NOW+40000, estimated_finish=NOW+36000, achievable=90, unlikely=False,
              provisional=True, load_w=42, fetching=False, price_error='', storage_ok=True,
              free_heap=100000, largest_block=50000, min_heap=90000, min_block=45000,
-             uptime=3600, history_days=180)
+             uptime=3600, history_days=180, reserve_threshold=5, reserve_recovery=10, reserve_active=False)
 history = [dict(time=NOW-86400+i*300, soc=50+i/10, soc_min=50+i/10, soc_max=51+i/10,
                 power=400 if i%20<10 else 0, on_seconds=300 if i%20<10 else 0, coverage=300,
                 price=50+i%80, ceiling=100, energy_kwh=.033 if i%20<10 else 0,
@@ -50,10 +50,20 @@ with sync_playwright() as p:
         assert page.locator('svg').count()==5
         assert page.locator('#longHistory').is_visible()==(state['history_days']>0)
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+        assert str(int(state['reserve_recovery']))+'%' in page.locator('#reserveInfo').inner_text()
+        page.locator('#reserve_threshold').fill('7')
+        page.locator('#reserve_recovery').fill('30')
         page.locator('#target').fill('85')
         page.get_by_role('button',name='Save settings',exact=True).click()
         page.wait_for_function("document.querySelector('#saved').textContent.includes('saved')")
-        assert state['target']==85
+        assert state['target']==85 and state['reserve_threshold']==7 and state['reserve_recovery']==30
+        page.locator('#reserve_recovery').fill('7')
+        page.get_by_role('button',name='Save settings',exact=True).click()
+        page.wait_for_function("document.querySelector('#error').textContent.includes('above')")
+        assert state['reserve_recovery']==30
+        page.locator('#reserve_recovery').fill('30')
+        page.get_by_role('button',name='Save settings',exact=True).click()
+        page.wait_for_function("document.querySelector('#error').textContent===''")
         page.get_by_role('button',name='Automatic',exact=True).click()
         page.wait_for_function("document.querySelector('[data-mode=auto]').getAttribute('aria-pressed')==='true'")
         page.get_by_role('button',name='Off',exact=True).click()

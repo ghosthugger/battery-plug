@@ -88,6 +88,82 @@ static void planner() {
   assert(std::isfinite(make_plan(s, in, prices.data(), prices.size()).current_price));
   assert(std::abs(converted_price(100, 11) - 137.5f) < 0.001f);
 }
+static void low_battery_recovery() {
+  Settings s;
+  Inputs in;
+  in.now = stamp("2026-11-01 12:00:00");
+  in.bms_fresh = in.meter_fresh = in.clock_ok = true;
+  in.soc = 5;
+  in.effective_charge_w = 0; // The reserve must not depend on a load estimate.
+  Plan p;
+  p.current = -1; // Neither prices nor a schedule are required.
+  Control c;
+  c.set_mode(Mode::AUTO, in.now, s);
+  c.last_switch = in.now; // Immediate low-battery start bypasses cooldown.
+  assert(c.evaluate(s, in, p, nullptr, 5));
+  assert(c.reserve_active && c.reason == Reason::LOW_BATTERY);
+  in.soc = 7;
+  assert(c.evaluate(s, in, p, nullptr, 5));
+  in.clock_ok = false;
+  assert(c.evaluate(s, in, p, nullptr, 5));
+  in.bms_fresh = false;
+  assert(!c.evaluate(s, in, p, nullptr, 5) && c.reason == Reason::BMS);
+  in.bms_fresh = true;
+  in.meter_fresh = false;
+  assert(!c.evaluate(s, in, p, nullptr, 5) && c.reason == Reason::METER);
+  in.meter_fresh = true;
+  in.fault = true;
+  assert(!c.evaluate(s, in, p, nullptr, 5) && c.reason == Reason::FAULT);
+  in.fault = false;
+  in.soc = UNKNOWN;
+  assert(!c.evaluate(s, in, p, nullptr, 5));
+  in.soc = -1;
+  assert(!c.evaluate(s, in, p, nullptr, 5));
+  in.soc = 101;
+  assert(!c.evaluate(s, in, p, nullptr, 5));
+  in.soc = 9.9;
+  assert(c.evaluate(s, in, p, nullptr, 5));
+  in.soc = 10;
+  in.clock_ok = true;
+  assert(!c.evaluate(s, in, p, nullptr, 5) && !c.reserve_active);
+  in.soc = 7;
+  assert(!c.evaluate(s, in, p, nullptr, 5)); // No retrigger until threshold.
+  c.reserve_active = true; // Persisted latch restored after restart at 7%.
+  assert(c.evaluate(s, in, p, nullptr, 5));
+  c = Control{};
+  c.set_mode(Mode::AUTO, in.now, s);
+  in.soc = 5;
+  assert(c.evaluate(s, in, p, nullptr, 5, 30));
+  in.soc = 10;
+  assert(c.evaluate(s, in, p, nullptr, 5, 30));
+  in.soc = 29.9;
+  assert(c.evaluate(s, in, p, nullptr, 5, 30));
+  in.soc = 30;
+  assert(!c.evaluate(s, in, p, nullptr, 5, 30) && !c.reserve_active);
+  in.soc = 20;
+  assert(!c.evaluate(s, in, p, nullptr, 5, 30));
+  in.soc = 5;
+  assert(c.evaluate(s, in, p, nullptr, 5, 100));
+  in.soc = 99.9;
+  assert(c.evaluate(s, in, p, nullptr, 5, 100));
+  in.soc = 100;
+  assert(!c.evaluate(s, in, p, nullptr, 5, 100));
+  assert(valid_reserve_settings(5, 10) && valid_reserve_settings(0, 1));
+  for (float stop : {0.0f, 4.0f, 5.0f, 101.0f, UNKNOWN})
+    assert(!valid_reserve_settings(5, stop));
+  assert(!valid_reserve_settings(UNKNOWN, 10) && !valid_reserve_settings(-1, 10));
+  c.set_mode(Mode::OFF, in.now, s);
+  in.soc = 2;
+  assert(!c.evaluate(s, in, p, nullptr, 5) && !c.reserve_active);
+  c.set_mode(Mode::AUTO, in.now, s);
+  assert(!c.evaluate(s, in, p, nullptr, 0)); // Explicitly disabled.
+  c.set_mode(Mode::NOW, in.now, s);
+  in.now = c.manual_deadline + 1;
+  s.target = 1; // Recovery overrides both an expired deadline and a lower target.
+  assert(c.evaluate(s, in, p, nullptr, 5) && c.mode == Mode::NOW);
+  in.soc = 10;
+  assert(!c.evaluate(s, in, p, nullptr, 5) && c.mode == Mode::OFF);
+}
 static void json_array() {
   int count = 0;
   assert(price_objects(" [ {\"value\":1}, {\"value\":2} ] ", [&](std::string_view) {
@@ -203,6 +279,7 @@ int main() {
   tzset();
   timestamps_and_large_costs();
   planner();
+  low_battery_recovery();
   json_array();
   daly();
   history();

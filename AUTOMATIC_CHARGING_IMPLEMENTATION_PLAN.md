@@ -64,6 +64,38 @@ charger input 400 W and initial efficiency 85%.
 - Use a two-minute switching interval except immediate Off, fault, target and
   deadline stops. Reconstruct schedules from live inputs after restart.
 
+## Addition: low-battery mains recovery (2026-11-01)
+
+Add a persistent dashboard setting `reserve_threshold`, default 5%, valid from
+0 to 95% (0 disables it). In Automatic or Charge now, fresh SOC at or below this
+threshold immediately enables mains and charging, overriding the price ceiling,
+missing prices, charge target, daily finish time and switching cooldown. It also
+works before clock synchronization, since this decision needs no schedule.
+
+Keep recovery active until SOC reaches the configurable `reserve_recovery`
+percentage (default 10%, strictly above the start threshold and at most 100%),
+then resume the existing controller. Persist both limits and the recovery latch so a reboot at, for example, 7% resumes recovery. Existing settings
+must survive the upgrade without a storage-layout migration. Display the active
+recovery reason, threshold and release percentage on the control page and API;
+record changes through existing decision/relay events.
+
+Explicit Off prevents recovery starts. Existing stale/invalid BMS and meter,
+BMS charging prohibition, overcurrent and OTA stops remain authoritative. Recovery
+may purchase expensive electricity and cannot prevent an outage if mains is lost,
+charging is prohibited, telemetry fails, or the load exceeds available charging
+power. Five percent is an editable starting value, not a guarantee of freezer
+continuity or a statement of SOC accuracy.
+
+Scope: keep all BMS access read-only. Do not include the experimental MOS control,
+both-switch test, mains/battery day scheduling, or keeping mains on after the
+normal target is reached. Preserve the earlier experiment separately from the
+active firmware source. This addition changes only the low-battery override.
+
+Validate threshold/release boundaries, hysteresis, price/deadline/clock overrides,
+fault and manual-Off precedence, persistence across restart, disabled recovery,
+settings validation and desktop/mobile editing. Test actual operation using a
+temporary threshold above the observed SOC, then restore the saved settings.
+
 ## Dashboard and bounded history
 
 Serve /charging alongside ESPHome diagnostics, embedding all HTML/CSS/JS and

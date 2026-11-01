@@ -12,6 +12,9 @@ with sync_playwright() as p:
   page.wait_for_function("document.querySelector('#soc').textContent.includes('%')",timeout=20000)
   page.wait_for_function("document.querySelectorAll('svg').length===5",timeout=20000)
   assert not page.locator('#error').inner_text()
+  assert page.locator('#reserve_threshold').input_value()=='5'
+  assert page.locator('#reserve_recovery').input_value()=='10'
+  assert '10%' in page.locator('#reserveInfo').inner_text()
   assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
   print(width,'px:',page.locator('#soc').inner_text(),page.locator('#reason').inner_text())
   page.screenshot(path=str(root/'.esphome'/f'live-dashboard-{width}.png'),full_page=True)
