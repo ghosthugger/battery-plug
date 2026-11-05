@@ -1,0 +1,54 @@
+{
+  "source_commit": "344ea81",
+  "algorithm": "compact-mpc-v2",
+  "ota": {
+    "source_commit": "344ea81",
+    "sha256": "ae70b2c5ce4e518136ae4dc57c0b7d0c4c25aa3ddfeaa33d4de9ed0523b57c19",
+    "ota_bytes": 1589488,
+    "headroom_bytes": 245520
+  },
+  "result": "deployed; live mode and restart tests passed",
+  "legacy_controls_rejected": [
+    [
+      "/charging/api/mode",
+      {
+        "mode": "off"
+      }
+    ],
+    [
+      "/charging/api/mode",
+      {
+        "mode": "now"
+      }
+    ],
+    [
+      "/charging/api/settings",
+      {
+        "reserve_threshold": "0"
+      }
+    ],
+    [
+      "/charging/api/settings",
+      {
+        "finish": "07:00"
+      }
+    ],
+    [
+      "/charging/api/settings",
+      {
+        "target": "50"
+      }
+    ]
+  ],
+  "settings_preserved": true,
+  "always_mode_survived_restart": true,
+  "observed_always_power_w": 477.622,
+  "after_restart_mode": "always",
+  "after_restart_relay": true,
+  "final_mode": "auto",
+  "reserve_start": 10.0,
+  "reserve_stop": 20.0,
+  "final_storage_ok": true,
+  "live_dashboard": "desktop1200px/mobile390px passed; no retired controls, no JS errors or overflow",
+  "notes": "Initial restart verification used a lower-case route and got404; corrected to the observed ESPHome entity name Restart and successful verification rerun. No firmware correction was required. This is short live verification, not a24h soak."
+}

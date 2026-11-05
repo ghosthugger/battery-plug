@@ -134,5 +134,16 @@ soak is not considered complete merely because short acceptance tests pass.
   full SOC, elapsed days, absent clock/prices, fault/resume, mode migration,
   mandatory recovery, observation history and partial slots. Desktop/mobile
   fixtures passed with no retired controls or JavaScript errors.
-- Pinned ESPHome build passed. Deployment/live checks are recorded below after
-  verifying both supported modes and restart persistence on the device.
+- Pinned ESPHome build and OTA upload passed: source `344ea81`, algorithm
+  `compact-mpc-v2`, image 1,589,488 B with 245,520 B application-slot headroom.
+- Live API rejects Off, Charge now, reserve 0 and retired target/finish settings.
+  Existing model/capacity/reserve/history settings survived the update. Target,
+  ceiling and manual finish fields are absent from the live status/control API.
+- Always charging enabled mains (477.622 W observed in the final test), survived
+  an actual restart, and resumed mains with fresh telemetry. Automatic was then
+  restored with the original 10–20% recovery limits. No BMS settings were written.
+- Live desktop 1200 px/mobile 390 px checks passed with only the two supported modes,
+  no target/time fields, all charts and no JS errors/overflow. Detailed deployment
+  evidence is `tests/backtest/nonexpiring-modes-deployment.json`. Verification used
+  the case-sensitive native Restart route after a harmless 404 from the initial
+  lower-case test route. No 24-hour soak is claimed.
