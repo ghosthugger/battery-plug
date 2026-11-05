@@ -97,9 +97,26 @@ soak is not considered complete merely because short acceptance tests pass.
 - Detailed source/data hashes, results and independent verification are committed
   under `tests/backtest/`. The old OTA image is retained locally under
   `.esphome/pre-optimizer/firmware.ota.bin`.
-- Deployment/live acceptance is pending upload. Direct Terminal LAN access works;
-  the detached background session could not reach the LAN. User-supplied
-  fresh status confirms the previous firmware remains online, target 100%,
-  reserve 10–20%, healthy BMS/meter, no alarms. No deployment or 24-hour soak is
-  claimed by these offline checks. Firmware preserves existing NVS settings and
-  adds separately versioned/checksummed optimiser settings/history records.
+- Deployment succeeded using the normal Terminal process because the detached
+  background session could not reach the LAN. Source commit `f8167da`; native
+  ESPHome OTA confirmed success and `/charging/api/status` reports
+  `compact-mpc-v1`. The image SHA256 is recorded in `tests/backtest/deployment.json`.
+- Existing Automatic mode, target 100%, finish 07:00, capacity 4 kWh, charger 400 W,
+  legacy efficiency/ceiling, recovery 10–20% and disabled long-term history all
+  survived the OTA restart. Existing 24-hour history remains visible. BMS access
+  is still read-only; live alarms are zero.
+- Short observation: 25 healthy post-startup BMS samples; fresh meter, valid prices,
+  healthy storage, no unexpected reboot. Initial solve 397 ms; a same-value settings
+  save caused a 371 ms replan and updated the learned load from 60 W to 174.27 W. The
+  save did not change any settings. New optimiser settings/history writes passed;
+  their survival through a separate later power cycle was not tested here.
+- Live desktop 1200 px/mobile 390 px dashboard tests passed, including installed
+  algorithm/model settings, all charts, no JavaScript errors or horizontal overflow.
+- Minimum reported heap 56,940 B; minimum free heap seen in status 56,060 B; minimum
+  largest free block after live UI 43,008 B. The previous 60 KiB free-heap goal is still
+  unmet during initial/TLS activity, while the 32 KiB largest-block goal is met.
+  No allocation failures occurred; steady free heap was around 80 KB. These are
+  short-run measurements, not a 24-hour soak or a freezer-continuity guarantee.
+- No 24-hour soak or overnight charging cycle is claimed complete. Detailed
+  before/after data and upload log are under `.esphome/optimizer-*`; the committed
+  deployment summary is `tests/backtest/deployment.json`.

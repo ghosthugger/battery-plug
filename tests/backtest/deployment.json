@@ -1,0 +1,59 @@
+{
+  "source_commit": "f8167da",
+  "algorithm": "compact-mpc-v1",
+  "device": "Athom Plug V3 c416f8",
+  "url": "http://192.168.1.254/charging",
+  "ota_bytes": 1600416,
+  "ota_sha256": "2de3453338ed20c460fb08c4b9d0db613f8650adbae69e7e067a531bd67fd600",
+  "ota_result": "success; native ESPHome OTA confirmation and installed algorithm verified",
+  "existing_settings_preserved": {
+    "mode": "auto",
+    "target": 100.0,
+    "finish": "07:00",
+    "ceiling": 100.0,
+    "capacity_kwh": 4.0,
+    "charger_w": 400,
+    "efficiency": 0.85,
+    "reserve_threshold": 10.0,
+    "reserve_recovery": 20.0,
+    "history_days": 0
+  },
+  "new_model_settings": {
+    "marginal_adder": 70.0,
+    "charge_efficiency": 0.9,
+    "discharge_efficiency": 0.9,
+    "idle_w": 10.0,
+    "fallback_load_w": 60.0
+  },
+  "runtime": {
+    "algorithm": "compact-mpc-v1",
+    "settings_preserved": true,
+    "samples": 30,
+    "min_free_heap_observed": 56060,
+    "min_reported_heap": 56940,
+    "min_reported_largest_block": 47104,
+    "max_solver_ms": 397,
+    "bms_fresh_samples": 25,
+    "meter_fresh_samples": 30,
+    "runtime_acceptance": "short observation complete; 24h soak not performed"
+  },
+  "after_settings_roundtrip": {
+    "soc": 67.2,
+    "reason": "Waiting for cheaper electricity",
+    "relay": false,
+    "predicted_load_w": 174.27,
+    "optimizer_ms": 371,
+    "free_heap": 79544,
+    "largest_block": 47104,
+    "min_heap": 56940,
+    "min_block": 43008,
+    "bms_fresh": true,
+    "meter_fresh": true,
+    "storage_ok": true,
+    "alarms": "0000000000000000"
+  },
+  "dashboard": "live desktop1200px and mobile390px passed; no JS errors or overflow; all graphs rendered",
+  "same_value_settings_write_and_replan": "passed; no configuration changes",
+  "memory_limit_note": "Earlier aspirational60KiB minimum-free-heap target not reached during startup/TLS activity. Minimum reported56940B; minimum observed current heap56060B; largest-block minimum after live UI43008B exceeds32KiB. No allocation failures or resets observed; short checks do not replace a24h soak.",
+  "soak_24h": "not performed"
+}
