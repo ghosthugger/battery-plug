@@ -250,3 +250,12 @@ settings. A full 30-day hardware soak is not claimed.
 
 Clarify the price chart title/legend: it shows the current decision, recalculated
 every 15 minutes, rather than a complete future charging schedule.
+
+Deployment verified 2026-11-05: native savings/core/optimiser tests, desktop/mobile
+fixture checks, and ESPHome 2026.10.1 production build passed. OTA image SHA-256
+`ce76ad459d80169d3ee885989cfbfe0aeb83b7fdc58f720f39f76ef648f41edd`
+(1,593,456 bytes) installed successfully. Read-only live checks confirmed exact
+UI/source match, all six charts, current-time marker, fresh BMS/meter data,
+`storage_ok=true`, and accumulating priced savings observations. Automatic mode,
+10%/20% reserve recovery and all existing tariff/model settings were preserved.
+Savings start with this deployment; 30 days of hardware history do not yet exist.
