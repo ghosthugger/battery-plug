@@ -34,7 +34,7 @@ def route(request):
         answer={'ok':True}
     elif endpoint=='mode':
         state['mode']=parse_qs(request.request.post_data)['mode'][0];answer={'ok':True}
-    else:answer={'status':state,'history':history,'days':days,'schedule':schedule,'events':[]}.get(endpoint,{})
+    else:answer={'status':state,'history':history,'days':days,'schedule':schedule,'events':[], 'savings':{'started_at':NOW-86400, 'reference_kr':1.5, 'days':[{'day':int(NOW/86400)-1,'known_seconds':86400,'missing_seconds':0,'baseline_kr':5,'grid_kr':3,'inventory_kr':-1,'savings_kr':1}, {'day':int(NOW/86400),'known_seconds':3600,'missing_seconds':600,'baseline_kr':.5,'grid_kr':1,'inventory_kr':.2,'savings_kr':-.3}]}}.get(endpoint,{})
     request.fulfill(body=json.dumps(answer),content_type='application/json')
 
 with sync_playwright() as p:
@@ -47,7 +47,10 @@ with sync_playwright() as p:
         page.goto('http://plug.test/charging')
         page.wait_for_function("document.querySelector('#soc').textContent.includes('72.3')")
         page.wait_for_function("document.querySelector('#months').children.length>0")
-        assert page.locator('svg').count()==5
+        assert page.locator('svg').count()==6
+        assert page.locator('#savingsTotal').inner_text()=='0.70 kr'
+        assert page.locator('#savingsChart rect[fill="#e58c97"]').count()==1
+        assert '0.2 hours excluded' in page.locator('#savingsCoverage').inner_text()
         assert page.locator('#longHistory').is_visible()==(state['history_days']>0)
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         assert str(int(state['reserve_recovery']))+'%' in page.locator('#reserveInfo').inner_text()
@@ -76,4 +79,4 @@ with sync_playwright() as p:
         page.close()
     browser.close()
 assert not failures,failures
-print('PASS: desktop/mobile layout, all five graphs, six months of summaries, settings and mode controls; no JS errors')
+print('PASS: desktop/mobile layout, all six graphs, six months of summaries, settings and mode controls; no JS errors')

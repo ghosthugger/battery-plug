@@ -222,3 +222,31 @@ mode migration, restart persistence, invalid legacy API requests and non-disable
 recovery. Update desktop/mobile fixtures; build, commit and deploy. Live tests may
 briefly select Always charging, verify mains output, restart to check persistence,
 then restore the prior supported mode. Record actual results without a soak claim.
+
+## Addition: 30-day estimated savings — 2026-11-05
+
+Add a persistent savings counter and signed daily graph for the last 30 Stockholm
+calendar days, including today. Estimate appliance demand from plug AC power and
+BMS DC power using configured charge/discharge efficiencies and inverter idle
+power. Compare its direct-mains cost with metered grid cost at published spot
+prices plus the configured variable charges. Add a fixed-value stored-energy
+adjustment so initial battery energy is not free and energy left charged is not
+written off. Show the cost terms and included/excluded observation hours. Keep
+negative results and mark partial days. Start collection now; no invented backfill.
+
+Use a separate bounded 972-byte savings record, independent of the disabled
+180-day detailed history. Persist with checksums every five minutes and on
+shutdown. Retain the 30 most recent local calendar days, correctly handling DST,
+restarts, missing/unknown-price intervals and backward clock corrections. Only
+fresh readings and stable relay intervals qualify; do not extrapolate outages.
+Keep the BMS read-only and leave the controller/optimiser behavior unchanged.
+No external logging or monitoring server is included.
+
+Validate accounting, energy conversion losses, negative prices, inventory value,
+missing data, restart, price/day boundaries, DST and expiry; check desktop/mobile
+counter and signed bars, build, commit and deploy. Verify the installed UI, fresh
+telemetry, accumulated savings observations and preserved mode/reserve/model
+settings. A full 30-day hardware soak is not claimed.
+
+Clarify the price chart title/legend: it shows the current decision, recalculated
+every 15 minutes, rather than a complete future charging schedule.

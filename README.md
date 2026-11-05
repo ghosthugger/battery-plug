@@ -179,3 +179,42 @@ The default trace has no network/device dependency. Read the committed
   retained as hardware provenance; it is no longer included by the release.
 
 The existing `../daly-read.swift` remains a read-only Mac protocol probe.
+
+## Thirty-day estimated savings
+
+The local dashboard now retains 30 Stockholm calendar-day summaries (including
+today), independently of the detailed 24-hour history. Collection begins with
+this firmware; older observations cannot provide the missing battery-current
+samples. The counter and daily signed bars compare estimated direct mains cost
+with the plug's metered grid cost, including the configured variable tariff adder.
+
+Appliance output is estimated from measured AC input and battery DC current:
+with mains on, subtract positive battery charging power divided by charging
+efficiency; add any battery-assisted output. With mains off, subtract configured
+inverter idle power from battery draw, then apply discharge efficiency. Meter
+and BMS samples are asynchronous, so this is an operating-cost estimate, not a
+separate appliance meter or guaranteed bill saving. Hardware cost, battery wear
+and fixed tariff charges are excluded.
+
+Savings = estimated direct-mains cost − metered grid cost + stored-energy change.
+The last term integrates signed battery DC energy at one fixed reference value:
+the initial lower-quartile available price estimate plus tariff adder, divided by
+charging efficiency (current published price fallback, zero floor). The reference
+is locked at the first priced observation and never revalues old history. This
+avoids assigning free value to initially stored energy or penalising energy still
+in the battery. It cancels over equal stored-energy charge/discharge cycles.
+The dashboard exposes all three terms; negative savings are retained.
+
+Only published prices and fresh meter/BMS observations are used. Exclude gaps,
+restarts, long sampling intervals and the first 20 seconds after relay changes;
+show included/excluded hours. DST days have their actual 23/24/25-hour duration.
+Tariff/model changes apply only to future observations. Summaries use 972 bytes
+of retained RAM, are checksummed in a separate NVS record every five minutes and
+at shutdown, and survive firmware updates/restarts. Sudden power loss can lose
+up to five minutes. Read-only JSON: `/charging/api/savings`.
+
+Validation: `tests/savings_test.cpp` exercises energy valuation, conversion
+losses, signed prices, missing data, restart, rollback, price boundaries, DST and
+30-day expiry. `tests/dashboard_test.py` checks counter arithmetic and signed
+bars at desktop/mobile widths alongside existing controls. The production build
+and existing controller/optimiser tests must pass before deployment.

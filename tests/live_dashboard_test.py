@@ -16,7 +16,7 @@ with sync_playwright() as p:
   assert status['algorithm']=='compact-mpc-v2'
   page.goto(base+'/charging')
   page.wait_for_function("document.querySelector('#soc').textContent.includes('%')",timeout=20000)
-  page.wait_for_function("document.querySelectorAll('svg').length===5",timeout=20000)
+  page.wait_for_function("document.querySelectorAll('svg').length===6",timeout=20000)
   assert not page.locator('#error').inner_text()
   for key in ['reserve_threshold','reserve_recovery','marginal_adder','charge_efficiency','discharge_efficiency','idle_w']:
    assert float(page.locator('#'+key).input_value())==status[key],key

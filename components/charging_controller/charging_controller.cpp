@@ -120,6 +120,7 @@ void Controller::restore_() {
   if (load_record(nvs_, "optimizer_cfg", optimizer) && valid_optimizer_settings(optimizer))
     optimizer_settings_ = optimizer;
   load_record(nvs_, "optimizer_hist", optimizer_history_);
+  load_record(nvs_, "savings_v1", savings_);
   if(!valid_operating_reserve(reserve_threshold_,reserve_recovery_)) {
     reserve_threshold_=5;reserve_recovery_=10;control_.reserve_active=false;
   }
@@ -187,6 +188,7 @@ void Controller::dump_config() {
 void Controller::on_shutdown() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   relay_->turn_off();
+  storage_ok_ &= save_record(nvs_, "savings_v1", savings_);
   persist_optimizer_();
   if (nvs_) nvs_commit(nvs_);
 }
@@ -339,6 +341,21 @@ void Controller::persist_history_(uint32_t timestamp) {
 }
 void Controller::record_(const Inputs& in, float seconds) {
   if (!in.clock_ok) return;
+  uint32_t ms = millis();
+  bool first = !savings_.started_at;
+  bool valid = in.bms_fresh && in.meter_fresh && ms - last_bms_ms_ <= 15000 &&
+      ms - last_power_ms_ <= 15000 && ms - output_changed_ms_ >= 20000 && !ota_ &&
+      std::isfinite(battery_.voltage) && battery_.voltage > 0;
+  savings_.sample(in.now, savings_continuous_, valid, relay_->state, meter_w_,
+      battery_.voltage * battery_.current, prices_.data(), price_count_,
+      optimizer_settings_.marginal_adder, optimizer_settings_.charge_efficiency,
+      optimizer_settings_.discharge_efficiency, optimizer_settings_.idle_w, continuation_ore_);
+  savings_continuous_ = true;
+  if (first || ms - savings_saved_ms_ >= 300000) {
+    storage_ok_ &= save_record(nvs_, "savings_v1", savings_);
+    if (nvs_) storage_ok_ &= nvs_commit(nvs_) == ESP_OK;
+    savings_saved_ms_ = ms;
+  }
   uint32_t previous = history_.active.time;
   bool complete = history_.add(in.now, seconds, meter_w_, in.bms_fresh ? battery_.soc : UNKNOWN,
                                relay_->state, plan_.current_price, settings_.ceiling, in.meter_fresh);
@@ -399,6 +416,7 @@ void Controller::tick_() {
       relay_->turn_off();
   }
   if (last_output_ != relay_->state || last_reason_ != int(control_.reason)) {
+    if (last_output_ != relay_->state) output_changed_ms_ = ms;
     log_event_(last_output_ != relay_->state ? 2 : 3, control_.reason, relay_->state ? 1 : 0);
     last_output_ = relay_->state;
     last_reason_ = int(control_.reason);
@@ -612,6 +630,10 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
       events_json_(r);
       return;
     }
+    if (u == "/charging/api/savings") {
+      savings_json_(r);
+      return;
+    }
   }
   if (r->method() == HTTP_POST && u == "/charging/api/settings") {
     Settings s;
@@ -813,6 +835,38 @@ void Controller::schedule_json_(AsyncWebServerRequest* r) {
     comma = true;
   }
   chunk(r, "]");
+  end_json(r);
+}
+void Controller::savings_json_(AsyncWebServerRequest* r) {
+  // Copy a bounded snapshot onto the heap, then release control's lock before I/O.
+  auto snapshot = std::make_unique<Savings>();
+  {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    *snapshot = savings_;
+  }
+  begin_json(r);
+  char b[440], reference[24];
+  snprintf(b, sizeof(b), "{\"started_at\":%u,\"last_at\":%u,\"reference_kr\":%s,\"days\":[",
+      snapshot->started_at, snapshot->last_at, num(snapshot->reference_kr, reference, sizeof(reference)));
+  if (!chunk(r, b)) return;
+  bool comma = false;
+  auto clock = clock_->now();
+  if (clock.is_valid()) {
+    auto today = day_key(clock.timestamp);
+    for (unsigned i = 30; i > 0; --i) {
+      auto key = today - i + 1;
+      const auto& d = snapshot->days[key % 30];
+      if (d.day != key) continue;
+      snprintf(b, sizeof(b), "%s{\"day\":%u,\"known_seconds\":%u,\"missing_seconds\":%u,"
+          "\"baseline_kr\":%.6f,\"grid_kr\":%.6f,\"inventory_kr\":%.6f,\"savings_kr\":%.6f,"
+          "\"load_kwh\":%.6f,\"grid_kwh\":%.6f}", comma ? "," : "", key,
+          d.known_seconds, d.missing_seconds, double(d.baseline_kr), double(d.grid_kr),
+          double(d.inventory_kr), double(d.benefit()), double(d.load_kwh), double(d.grid_kwh));
+      if (!chunk(r, b)) return;
+      comma = true;
+    }
+  }
+  chunk(r, "]}");
   end_json(r);
 }
 void Controller::events_json_(AsyncWebServerRequest* r) {
