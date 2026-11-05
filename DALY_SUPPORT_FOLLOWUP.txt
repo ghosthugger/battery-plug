@@ -1,0 +1,25 @@
+Hello,
+
+I've attached my AliExpress order screenshot. The purchased version is 200 A, 4S 12 V LiFePO4 with Bluetooth.
+
+Identification:
+- Hardware: BMS-GD230-303E
+- Software: 32_230914_001T
+- SN code: 207IE70700920
+- Battery serial number: 20231021
+
+To clarify: I am not reporting that the battery continues charging after charging is disabled.
+
+I use a combined mains-powered inverter/charger. I want it to supply my appliances from mains while preventing battery charging.
+
+My questions are:
+
+1. Can I leave charging MOS OFF and discharge MOS ON for extended periods? If mains fails and the battery starts supplying the appliances, does this firmware prevent the charging MOSFET's body diode from overheating?
+
+2. Alternatively, can I leave both MOS switches OFF while the charger remains connected? Is this supported, and what switching sequence should I use?
+
+3. What does Modbus D2 register 0x003D = 0x0010 mean? This value appeared after manually disabling charging and remained after re-enabling it.
+
+Please confirm these behaviors for my hardware and firmware. If the identifiers and order screenshot are insufficient, please specify exactly what additional identification you need.
+
+Thank you.
