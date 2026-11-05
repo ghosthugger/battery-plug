@@ -282,3 +282,13 @@ cheap windows, recovery, and comparison with repeated continuous-state suffix
 solves. Check desktop/mobile future/current styles and unavailable forecasts,
 run existing tests and production build, then commit/deploy. Verify live source
 match, forecast API/shading, healthy BMS/meter data, preserved settings and savings.
+
+Deployment verified 2026-11-05: native projection/core/optimiser/savings tests,
+full ESPHome 2026.10.1 build, and desktop/mobile fixture checks passed. OTA image
+SHA-256 `5c1959ee86199648cfa55fc9f3884f1044e32492fa19f2cb881b28996d6aca0d`
+(1,595,264 bytes) installed successfully. Read-only live checks confirmed exact
+UI/source match, future shading and next-period text at 1200/390 px, fresh
+BMS/meter data, healthy storage, preserved Automatic mode and 10%/20% reserve
+settings, unchanged tariff/model settings and preserved savings start/reference
+and history. At verification, the next provisional mains period was 5 November
+21:15 Stockholm; this is a changing prediction, not a promised switch time.
