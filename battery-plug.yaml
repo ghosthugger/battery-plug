@@ -86,8 +86,6 @@ charging_controller:
   relay_id: relay
   power_id: power_sensor
   clock_id: sntp_time
-  target_id: target_battery_percentage
-  finish_id: charging_finish_time
   status_id: charging_settings_status
 
 time:
@@ -134,12 +132,12 @@ switch:
     pin: GPIO5
     restore_mode: ALWAYS_OFF
   - platform: template
-    name: Switch
-    lambda: return id(relay).state;
+    name: Always charging
+    lambda: return id(controller).always_charging();
     turn_on_action:
-      - lambda: id(controller).request_mode(2);
+      - lambda: id(controller).request_mode(3);
     turn_off_action:
-      - lambda: id(controller).request_mode(0);
+      - lambda: id(controller).request_mode(1);
 
 binary_sensor:
   - platform: gpio
@@ -169,34 +167,6 @@ button:
     name: Restart
   - platform: safe_mode
     name: Safe Mode
-
-number:
-  - platform: template
-    id: target_battery_percentage
-    name: Target battery percentage
-    unit_of_measurement: "%"
-    min_value: 0
-    max_value: 100
-    step: 1
-    mode: box
-    optimistic: true
-    restore_value: true
-    initial_value: 90
-    web_server:
-      sorting_group_id: charging_settings
-      sorting_weight: 10
-
-datetime:
-  - platform: template
-    id: charging_finish_time
-    name: Finish time (Stockholm)
-    type: time
-    optimistic: true
-    restore_value: true
-    initial_value: "07:00:00"
-    web_server:
-      sorting_group_id: charging_settings
-      sorting_weight: 20
 
 text_sensor:
   - platform: template

@@ -15,7 +15,10 @@ constexpr size_t RETAINED_DAYS = CHARGING_DAILY_HISTORY_DAYS;
 constexpr size_t PRICE_COUNT = 200, BUCKET_COUNT = 288, DAY_COUNT = RETAINED_DAYS ? RETAINED_DAYS : 1,
                  EVENT_COUNT = 128;
 constexpr float UNKNOWN = std::numeric_limits<float>::quiet_NaN();
-enum class Mode : uint8_t { OFF, AUTO, NOW };
+enum class Mode : uint8_t { OFF, AUTO, NOW, ALWAYS };
+// Values0/2 remain only for decoding legacy records/tests; never accepted as operating modes.
+inline Mode restored_operating_mode(uint32_t value) { return value==3?Mode::ALWAYS:Mode::AUTO; }
+inline bool valid_operating_mode(int value) { return value==1 || value==3; }
 enum class Reason : uint8_t {
   OFF,
   CLOCK,
@@ -33,7 +36,8 @@ enum class Reason : uint8_t {
   OTA,
   COOLDOWN,
   LOW_BATTERY,
-  PLANNER
+  PLANNER,
+  ALWAYS
 };
 inline const char* reason_text(Reason r) {
   static const char* names[] = {"Off",
@@ -52,7 +56,8 @@ inline const char* reason_text(Reason r) {
                                 "Firmware update in progress",
                                 "Waiting for switch cooldown",
                                 "Low battery: restoring mains",
-                                "Waiting for optimiser settings or price data"};
+                                "Waiting for optimiser settings or price data",
+                                "Always charging: mains enabled"};
   return names[static_cast<unsigned>(r)];
 }
 struct Settings {
@@ -69,6 +74,9 @@ inline bool valid_settings(const Settings& s) {
 inline bool valid_reserve_settings(float start, float stop) {
   return std::isfinite(start) && std::isfinite(stop) && start >= 0 && start <= 95 &&
          stop > start && stop <= 100;
+}
+inline bool valid_operating_reserve(float start,float stop) {
+  return start>=1 && valid_reserve_settings(start,stop);
 }
 struct Price {
   uint32_t start{0};
@@ -447,17 +455,19 @@ class Control {
   // data/fault checks and the persistent low-battery recovery remain authoritative.
   bool evaluate_optimized(const Settings& s, const Inputs& in, const Plan& p, const Price* prices,
                           bool ready, bool request, float start, float stop) {
-    if (mode != Mode::AUTO) return evaluate(s,in,p,prices,start,stop);
+    (void)s; (void)prices;
+    if (mode!=Mode::AUTO && mode!=Mode::ALWAYS) mode=Mode::AUTO;
     if (start<=0 || !valid_reserve_settings(start,stop)) reserve_active=false;
     else if (in.bms_fresh && std::isfinite(in.soc) && in.soc>=0 && in.soc<=100) {
       if (in.soc<=start) reserve_active=true;
       else if (in.soc>=stop) reserve_active=false;
     }
     bool want=false,immediate=true;
-    if (!in.clock_ok && !reserve_active) reason=Reason::CLOCK;
+    if (mode==Mode::AUTO && !in.clock_ok && !reserve_active) reason=Reason::CLOCK;
     else if (!in.bms_fresh || !std::isfinite(in.soc) || in.soc<0 || in.soc>100) reason=Reason::BMS;
     else if (!in.meter_fresh) reason=Reason::METER;
     else if (in.fault) reason=Reason::FAULT;
+    else if (mode==Mode::ALWAYS) {want=true;reason=Reason::ALWAYS;}
     else if (reserve_active) {want=true;reason=Reason::LOW_BATTERY;}
     else if (p.current<0) reason=Reason::PRICE_UNKNOWN;
     else if (!ready) reason=Reason::PLANNER;

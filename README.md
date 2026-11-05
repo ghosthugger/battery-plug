@@ -15,52 +15,33 @@ The agreed plan, including the description of the original state, is saved in
 
 ## Charging controls
 
-Choose **Automatic** to enable scheduled charging and low-battery recovery.
-**Off** prevents automatic starts, including low-battery recovery.
+Choose **Automatic** for cost optimisation or **Always charging** to keep mains
+continuously enabled. Both modes persist across restart and neither expires.
+There is no Off mode, Charge now, manual target or manual finish time.
 
-| Mode | Behavior |
-| --- | --- |
-| Off | Stops the charger and suppresses scheduled starts. |
-| Automatic | Minimises estimated electricity cost using published prices and a simple forecast; mains also charges the battery up to full. |
-| Charge now | Stops at the manual target/deadline, stale data or a charge-prohibiting fault. Returns to Off on completion. |
+Automatic uses the existing 101-level cost optimiser and mandatory configurable
+low-battery recovery (currently 10–20%). Recovery start must be at least 1%; it
+cannot be disabled. Always charging ignores prices, SOC targets and time: mains
+continues supplying the appliances when the battery is full, and the charger
+regulates charging. The plug never commands the BMS MOSFETs.
 
-Automatic uses a 101-level dynamic programme every 15 minutes, with the actual
-low-battery recovery latch included in its model. It has two physical modes:
-battery supplies appliances; or mains supplies appliances and charges. It never
-assumes that charging can be disabled independently. It has no daily SOC target,
-finish time or price ceiling. The target and finish fields apply to Charge now.
+The physical button toggles Automatic/Always charging. The diagnostics switch is
+named Always charging: turning it off selects Automatic, never a disabled state.
+Existing legacy Off/Charge now records migrate to Automatic; Always charging
+is saved separately in the existing versioned mode word. Old mode API calls
+are rejected, as are retired manual settings. Overcurrent remains latched across
+restart and needs explicit acknowledgement by selecting a supported mode.
 
-Physical estimates are editable: 4 kWh, 400 W AC charger, 90% charging and inverter
-efficiency, 10 W inverter idle, 60 W initial appliance estimate. Automatic estimates
-appliance consumption from battery DC measurements while mains is off, using a
-seven-day weighted mean. It cannot separate appliance/charger power on mains.
+Existing BMS fault, stale BMS/meter, overcurrent and OTA stops remain authoritative.
+The modes eliminate deliberate/expired Off states; they cannot guarantee freezer
+continuity during hardware faults, telemetry failure or loss of mains.
 
-Published prices are extended by up to 24 h of flat forecast from the median of
-seven days of completed hourly prices. A low-quartile continuation value avoids
-emptying the battery merely because published prices end. At startup, existing
-published prices supply an initial estimate. Forecasts are not measured prices.
-The configurable extra marginal charge defaults to 70 öre/kWh including VAT;
-set it to the variable grid/tax/supplier charge on your bill. No savings are
-guaranteed; efficiencies, idle draw and consumption are estimates.
-
-Low-battery mains recovery defaults to **5%**. In Automatic or Charge now, SOC
-at or below the configurable threshold immediately restores mains and charging,
-regardless of price, target, deadline or clock synchronization. Recovery remains
-active until SOC reaches the configurable recovery stop percentage (default 10%), then
-normal control resumes. The recovery stop must be above the start threshold and
-at most 100%. Both settings and the recovery state survive restart. Set
-`reserve_threshold` to 0 to disable it (allowed range 0–95%); this also suspends economic Automatic decisions. Explicit Off and
-existing BMS, meter, overcurrent and OTA stops remain authoritative. This can buy
-expensive electricity; it cannot guarantee continuity if mains or telemetry is
-lost, the BMS prohibits charging, or the load exceeds available charging power.
-
-A short physical button press stops an active charge or requests Charge now.
-The switch on the diagnostics page uses the same controller; it cannot bypass
-BMS/data checks. Automatic mode persists across restarts, but a manual charge
-never resumes after reboot. The physical relay always starts off until required
-inputs are valid. The generic Bluetooth proxy, BLE provisioning and unused Home
-Assistant native API have been removed to save memory. Native OTA on port 3232
-and the web OTA form remain available.
+Model estimates remain configurable: 4 kWh, 400 W AC charger, 90% charging/inverter
+efficiency, 10 W idle, 60 W initial appliance estimate. Automatic learns consumption
+from battery measurements while mains is off, using bounded seven-day history.
+It extends published prices with a recent hourly-price median forecast and values
+stored energy using a low-quartile continuation estimate. The assumed extra
+variable tariff is 70 öre/kWh including VAT; adjust it to your bill.
 
 ## Prices and stopping rules
 
@@ -72,21 +53,16 @@ Gridio's raw EUR/MWh values are converted using Elklocka's calculation:
 
 Displayed prices and recorded historical costs include spot+VAT only. They
 exclude the configurable marginal adder, supplier/grid fixed charges and battery
-wear. Automatic includes the marginal adder in its optimisation. The older
-ceiling remains in stored/API settings for compatibility but does not constrain
-Automatic. Negative prices are supported. Missing current prices stop economic
+wear. Automatic includes the marginal adder in its optimisation. The legacy ceiling is retained only inside old storage/history records; it is not an active control. Negative prices are supported. Missing current prices stop economic
 Automatic starts; published cached intervals remain usable during outages.
 Recovery can override unavailable prices, as before.
 
 The controller polls the BMS every ten seconds and stops for a BMS reading older
-than 60 seconds, stale/invalid power data (30 seconds), invalid clock outside low-battery recovery, a BMS
-charge prohibition or the plug's overcurrent latch. Off, fault and manual target/deadline stops override the two-minute switch cooldown. The BMS's own
+than 60 seconds, stale/invalid power data (30 seconds), a BMS
+charge prohibition or the plug's overcurrent latch. Fault stops and low-battery recovery override the two-minute ordinary switch cooldown. Always charging does not wait for a clock or prices. Automatic also requires a clock except during low-battery recovery. The BMS's own
 settings and MOSFET configuration are never changed. The charger's and BMS's
 hardware protections remain responsible for battery protection.
 
-Stockholm daily deadlines use deterministic civil-date calculations, including
-23/25-hour days. An ambiguous autumn deadline selects the next real occurrence;
-a nonexistent spring deadline moves forward by the missing hour.
 
 ## On-device history
 
@@ -117,8 +93,8 @@ All routes are relative to `/charging/api/`:
 | Method | Route | Result |
 | --- | --- | --- |
 | GET | `status` | Live state and settings, including `reserve_threshold`, `reserve_recovery`, `reserve_active`, planning reasons, connectivity and memory diagnostics. |
-| POST | `settings` | Form-encoded partial settings: `target`, `finish` (`HH:MM`), `ceiling`, `capacity_kwh`, `charger_w`, `efficiency`, `reserve_threshold`, `reserve_recovery`, `marginal_adder`, `charge_efficiency`, `discharge_efficiency`, `idle_w`, `fallback_load_w`. |
-| POST | `mode` | Form field `mode=off`, `auto` or `now`. |
+| POST | `settings` | Form-encoded partial settings: `capacity_kwh`, `charger_w`, `efficiency`, `reserve_threshold`, `reserve_recovery`, `marginal_adder`, `charge_efficiency`, `discharge_efficiency`, `idle_w`, `fallback_load_w`. |
+| POST | `mode` | Form field `mode=auto` or `always`. Both persist without a cutoff. |
 | GET | `schedule` | Published price periods and the next committed mains decision. |
 | GET | `history` | Bounded 24-hour aggregates, streamed in chunks. |
 | GET | `days` | Retained daily summaries, streamed in chunks. |
@@ -155,7 +131,7 @@ uv tool run --with playwright python tests/live_dashboard_test.py
 
 The browser scripts use a fresh headless Chrome profile, not your existing
 browser session. The fixture test does not operate the plug. The live browser
-test is read-only. Native tests also cover optimiser fault precedence, manual-only limits, recovery, partial slots and observation history. Legacy tests cover cheapest-period scheduling, ceiling
+test is read-only. Native tests also cover optimiser fault precedence, non-expiring modes, fault stops, recovery, partial slots and observation history. Legacy tests cover cheapest-period scheduling, ceiling
 failures, manual overrides and stops, negative prices, loads, provisional
 horizons, Daly CRC/fragmentation/alarm interpretation, energy/cost integration,
 ring rollover, months of daily records, and spring/autumn DST edge cases.

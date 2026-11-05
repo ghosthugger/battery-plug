@@ -3,7 +3,7 @@ import gzip
 
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import ble_client, sensor, switch, number, datetime, time, text_sensor
+from esphome.components import ble_client, sensor, switch, time, text_sensor
 from esphome.const import CONF_ID
 
 DEPENDENCIES = ["esp32", "ble_client", "web_server", "time"]
@@ -16,8 +16,6 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Required("relay_id"): cv.use_id(switch.Switch),
     cv.Required("power_id"): cv.use_id(sensor.Sensor),
     cv.Required("clock_id"): cv.use_id(time.RealTimeClock),
-    cv.Required("target_id"): cv.use_id(number.Number),
-    cv.Required("finish_id"): cv.use_id(datetime.TimeEntity),
     cv.Required("status_id"): cv.use_id(text_sensor.TextSensor),
 }).extend(ble_client.BLE_CLIENT_SCHEMA).extend(cv.COMPONENT_SCHEMA)
 
@@ -26,7 +24,7 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await ble_client.register_ble_node(var, config)
-    for key in ["relay", "power", "clock", "target", "finish", "status"]:
+    for key in ["relay", "power", "clock", "status"]:
         ref = await cg.get_variable(config[f"{key}_id"])
         cg.add(getattr(var, f"set_{key}")(ref))
     # Reproducible, entirely local UI asset. The generated header lives in the

@@ -25,11 +25,25 @@ int main() {
  in.clock_ok=true;p.current=0;in.now+=900;
  assert(!c.evaluate_optimized(s,in,p,&price,false,true,10,20)&&c.reason==Reason::PLANNER);
  assert(c.evaluate_optimized(s,in,p,&price,true,true,10,20));
- c.set_mode(Mode::OFF,in.now,s);in.soc=1;
- assert(!c.evaluate_optimized(s,in,p,&price,true,true,10,20)&&!c.reserve_active);
- // Manual mode retains target/deadline rules.
- c.set_mode(Mode::NOW,in.now,s);in.soc=95;
- assert(!c.evaluate_optimized(s,in,p,&price,true,true,10,20)&&c.mode==Mode::OFF);
+ // Only non-expiring operating modes are accepted; legacy records migrate safely.
+ assert(!valid_operating_mode(0)&&!valid_operating_mode(2));
+ assert(valid_operating_mode(1)&&valid_operating_mode(3));
+ assert(restored_operating_mode(0)==Mode::AUTO&&restored_operating_mode(2)==Mode::AUTO);
+ assert(restored_operating_mode(3)==Mode::ALWAYS);
+ assert(!valid_operating_reserve(0,10)&&valid_operating_reserve(10,20));
+ c.set_mode(Mode::ALWAYS,in.now,s);in.soc=100;in.clock_ok=false;p.current=-1;
+ assert(c.evaluate_optimized(s,in,p,&price,false,false,10,20));
+ assert(c.reason==Reason::ALWAYS&&c.mode==Mode::ALWAYS);
+ in.now+=3*86400;
+ assert(c.evaluate_optimized(s,in,p,&price,false,false,10,20)&&c.mode==Mode::ALWAYS);
+ in.soc=5;assert(c.evaluate_optimized(s,in,p,&price,false,false,10,20));
+ in.fault=true;assert(!c.evaluate_optimized(s,in,p,&price,false,false,10,20));
+ assert(c.mode==Mode::ALWAYS);
+ in.fault=false;assert(c.evaluate_optimized(s,in,p,&price,false,false,10,20));
+ in.bms_fresh=false;assert(!c.evaluate_optimized(s,in,p,&price,false,false,10,20));
+ in.bms_fresh=true;in.meter_fresh=false;assert(!c.evaluate_optimized(s,in,p,&price,false,false,10,20));
+ in.meter_fresh=true;in.soc=100;
+ assert(c.evaluate_optimized(s,in,p,&price,false,false,10,20));
  OptimizerHistory history;OptimizerSettings settings;
  assert(valid_optimizer_settings(settings));settings.idle_w=NAN;assert(!valid_optimizer_settings(settings));
  uint32_t hour=in.now/3600*3600;
@@ -62,5 +76,5 @@ int main() {
  cfg.dt=.25;
  int decision=solver.choose(cfg,2,.1,2,false,0,.1,1./3600);
  assert(decision==0);
- std::cout<<"PASS: optimiser automatic/manual integration, fault precedence, recovery latch, bounded histories, partial slots; workspace "<<sizeof(solver)<<" bytes\n";
+ std::cout<<"PASS: non-expiring Automatic/Always charging modes, fault precedence, recovery latch, bounded histories, partial slots; workspace "<<sizeof(solver)<<" bytes\n";
 }

@@ -201,3 +201,24 @@ Retain the pre-change image under `.esphome/pre-optimizer` for rollback. Verify 
 installed algorithm identifier, existing settings/history, BMS freshness, price
 fetch, decisions, restart behavior and runtime heap/latency. A 24-hour soak is
 separate follow-up evidence, not a prerequisite falsely marked complete here.
+
+## Addition: non-expiring operating modes — 2026-11-05
+
+Supersedes all earlier Off/Charge now/manual-target/deadline controls. Expose only
+Automatic and Always charging. Always charging keeps mains enabled at any SOC,
+including full, without a time/price/target cutoff; the charger regulates charge.
+Keep existing BMS/meter/overcurrent/OTA protections. No BMS writes are introduced.
+
+Persist both modes across restart. Migrate legacy Off/Charge now to Automatic;
+preserve existing capacity, tariff/model estimates, history and reserve settings.
+Disallow a zero reserve threshold; legacy disabled/invalid reserves become5–10%.
+Remove manual target/time entities from diagnostics and custom UI. Reject retired
+mode/settings requests. Physical button toggles the two supported modes; diagnostics
+Always charging switch OFF selects Automatic. Overcurrent is a separate persistent
+protective latch, not an operating mode; explicit mode selection acknowledges it.
+
+Verify full battery, missing clock/prices, elapsed days, temporary faults/resume,
+mode migration, restart persistence, invalid legacy API requests and non-disableable
+recovery. Update desktop/mobile fixtures; build, commit and deploy. Live tests may
+briefly select Always charging, verify mains output, restart to check persistence,
+then restore the prior supported mode. Record actual results without a soak claim.

@@ -100,10 +100,11 @@ static std::string get_https(const std::string& url) {
 void Controller::restore_() {
   storage_ok_ = nvs_open("charging_v1", NVS_READWRITE, &nvs_) == ESP_OK;
   if (!storage_ok_) return;
+  control_.mode=Mode::AUTO;
   StoredSettings s;
   if (load_record(nvs_, "settings", s) && valid_settings(s.settings)) {
     settings_ = s.settings;
-    control_.mode = s.automatic ? Mode::AUTO : Mode::OFF;
+    control_.mode = restored_operating_mode(s.automatic);
   }
   float reserve = 5;
   if (load_record(nvs_, "reserve", reserve) && std::isfinite(reserve) && reserve >= 0 && reserve <= 95)
@@ -113,11 +114,15 @@ void Controller::restore_() {
   if (load_record(nvs_, "reserve_end", recovery) && valid_reserve_settings(reserve_threshold_, recovery))
     reserve_recovery_ = recovery;
   load_record(nvs_, "reserve_active", control_.reserve_active);
+  uint32_t overcurrent=0;
+  if(load_record(nvs_, "overcurrent", overcurrent)) overcurrent_=overcurrent!=0;
   OptimizerSettings optimizer;
   if (load_record(nvs_, "optimizer_cfg", optimizer) && valid_optimizer_settings(optimizer))
     optimizer_settings_ = optimizer;
   load_record(nvs_, "optimizer_hist", optimizer_history_);
-  if (control_.mode == Mode::OFF || reserve_threshold_ == 0) control_.reserve_active = false;
+  if(!valid_operating_reserve(reserve_threshold_,reserve_recovery_)) {
+    reserve_threshold_=5;reserve_recovery_=10;control_.reserve_active=false;
+  }
   char key[12];
   for (size_t i = 0; i < 24; ++i) {
     Hour h;
@@ -232,47 +237,24 @@ void Controller::update_optimizer_(const Inputs& in) {
   min_heap_=std::min(min_heap_,uint32_t(heap_caps_get_free_size(MALLOC_CAP_8BIT)));
   min_block_=std::min(min_block_,uint32_t(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
 }
-void Controller::sync_settings_() {
-  auto t = finish_->state_as_esptime();
-  Settings s = settings_;
-  if (std::isfinite(target_->state)) s.target = target_->state;
-  s.hour = t.hour;
-  s.minute = t.minute;
-  if (valid_settings(s) &&
-      (s.target != settings_.target || s.hour != settings_.hour || s.minute != settings_.minute)) {
-    settings_ = s;
-    plan_dirty_ = true;
-    control_.target_latched = false;
-    persist_settings_();
-    cycle_deadline_ = 0;
-    if (control_.mode == Mode::NOW && clock_->now().is_valid())
-      control_.manual_deadline = next_deadline(clock_->now().timestamp, s.hour, s.minute);
-  }
-}
 void Controller::persist_settings_() {
+  storage_ok_ &= save_record(nvs_, "overcurrent", uint32_t(overcurrent_));
   storage_ok_ &= save_record(nvs_, "reserve", reserve_threshold_);
   storage_ok_ &= save_record(nvs_, "reserve_end", reserve_recovery_);
   storage_ok_ &= save_record(nvs_, "reserve_active", control_.reserve_active);
   storage_ok_ &=
-      save_record(nvs_, "settings", StoredSettings{settings_, control_.mode == Mode::AUTO ? 1U : 0U});
+      save_record(nvs_, "settings", StoredSettings{settings_, static_cast<uint32_t>(control_.mode)});
   if (nvs_) storage_ok_ &= nvs_commit(nvs_) == ESP_OK;
 }
 void Controller::request_mode(int value) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  if (value < 0 || value > 2) return;
-  sync_settings_();
+  if (!valid_operating_mode(value)) return;
   auto now = clock_->now();
-  if (value == 2 && !now.is_valid()) return;
-  if (value != 0) overcurrent_ = false;
+  overcurrent_ = false;
   control_.set_mode(Mode(value), now.timestamp, settings_);
-  if (value == 0) {
-    if (relay_->state) control_.last_switch = now.timestamp;
-    relay_->turn_off();
-    cycle_deadline_ = 0;
-  }
   plan_dirty_ = true;
   persist_settings_();
-  if (now.is_valid()) log_event_(1, Reason::OFF, float(value));
+  if (now.is_valid()) log_event_(1, value==3?Reason::ALWAYS:Reason::WAITING, float(value));
 }
 void Controller::log_event_(unsigned kind, Reason why, float value) {
   auto now = clock_->now();
@@ -363,38 +345,28 @@ void Controller::record_(const Inputs& in, float seconds) {
   if (complete) persist_history_(previous);
 }
 void Controller::tick_() {
-  sync_settings_();
   auto in = inputs_();
   uint32_t ms = millis();
   if (in.clock_ok && !network_enabled_) {
     network_enabled_ = true;
-    log_event_(0, Reason::OFF);
-  }
-  if (control_.mode != Mode::AUTO && cycle_deadline_ && in.clock_ok && in.now >= cycle_deadline_) {
-    bool met = in.bms_fresh && in.soc >= settings_.target;
-    history_.deadline(cycle_deadline_ - 1, met);
-    persist_history_(cycle_deadline_ - 1);
-    log_event_(4, Reason::DEADLINE, met ? 1 : 0);
-    control_.cycle_met = false;
-    cycle_deadline_ = 0;
-    plan_dirty_ = true;
+    log_event_(0, control_.mode==Mode::ALWAYS?Reason::ALWAYS:Reason::WAITING);
   }
   bool automatic=control_.mode==Mode::AUTO;
-  bool replan=automatic ? (plan_dirty_ || in.now>=optimizer_until_) :
-      (plan_dirty_ || ms-last_plan_ms_>=60000 ||
-       (plan_.current>=0 && in.now>=prices_[plan_.current].start+900));
-  if (in.clock_ok && replan && (!automatic || !fetching_.load())) {
+  bool replan=plan_dirty_ || in.now>=optimizer_until_;
+  if (in.clock_ok && replan && !fetching_.load()) {
     if(automatic) update_optimizer_(in);
     else {
-      plan_ = make_plan(settings_, in, prices_.data(), price_count_);
-      // There is no committed automatic schedule in Off/Charge now modes.
-      plan_.seconds.fill(0);
-      if(control_.mode==Mode::NOW && plan_.current>=0)
-        plan_.seconds[plan_.current]=prices_[plan_.current].start+900-in.now;
+      plan_=Plan{};plan_.at=in.now;
+      optimizer_until_=in.now/900*900+900;
+      for(size_t i=0;i<price_count_;++i) {
+        if(prices_[i].start+900>in.now) plan_.horizon=prices_[i].start+900;
+        if(prices_[i].start<=in.now && in.now<prices_[i].start+900) {
+          plan_.current=i;plan_.current_price=prices_[i].ore;
+          plan_.seconds[i]=prices_[i].start+900-in.now;
+        }
+      }
     }
-    last_plan_ms_ = ms;
-    plan_dirty_ = false;
-    if (!automatic && !cycle_deadline_) cycle_deadline_ = plan_.deadline;
+    last_plan_ms_=ms;plan_dirty_=false;
   }
   if(automatic) {
     // A fetch may still be running when a slot ends. A short hold of the last
@@ -662,8 +634,7 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
       return true;
     };
     bool valid = read("reserve_threshold", reserve) && read("reserve_recovery", recovery) &&
-                 valid_reserve_settings(reserve, recovery) &&
-                 read("target", s.target) && read("ceiling", s.ceiling) &&
+                 valid_operating_reserve(reserve, recovery) &&
                  read("capacity_kwh", s.capacity_kwh) && read("charger_w", s.charger_w) &&
                  read("efficiency", s.efficiency) &&
                  read("marginal_adder",optimizer.marginal_adder) &&
@@ -671,17 +642,8 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
                  read("discharge_efficiency",optimizer.discharge_efficiency) &&
                  read("idle_w",optimizer.idle_w) && read("fallback_load_w",optimizer.fallback_load_w) &&
                  valid_optimizer_settings(optimizer);
-    if (r->hasArg("finish")) {
-      auto v = r->arg("finish");
-      int h, m;
-      char extra;
-      if (sscanf(v.c_str(), "%d:%d%c", &h, &m, &extra) != 2 || h < 0 || h > 23 || m < 0 || m > 59)
-        valid = false;
-      else {
-        s.hour = h;
-        s.minute = m;
-      }
-    }
+    // Reject retired controls rather than silently accepting a stale browser's form.
+    if(r->hasArg("finish") || r->hasArg("target") || r->hasArg("ceiling")) valid=false;
     if (!valid || !valid_settings(s)) {
       r->send(400, "application/json", "{\"error\":\"Invalid settings\"}");
       return;
@@ -695,35 +657,20 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
       optimizer_settings_ = optimizer;
       reserve_threshold_ = reserve;
       reserve_recovery_ = recovery;
-      if (reserve == 0) control_.reserve_active = false;
-      auto c = target_->make_call();
-      c.set_value(s.target);
-      c.perform();
-      auto t = finish_->make_call();
-      t.set_time(s.hour, s.minute, 0);
-      t.perform();
       gross_charge_w_ = settings_.charger_w * settings_.efficiency;
-      cycle_deadline_ = 0;
-      if (control_.mode == Mode::NOW)
-        control_.manual_deadline = next_deadline(clock_->now().timestamp, s.hour, s.minute);
-      control_.target_latched = false;
       plan_dirty_ = true;
       persist_settings_();
       persist_optimizer_();
-      log_event_(6, Reason::OFF);
+      log_event_(6, control_.mode==Mode::ALWAYS?Reason::ALWAYS:Reason::WAITING);
     });
     r->send(200, "application/json", "{\"ok\":true}");
     return;
   }
   if (r->method() == HTTP_POST && u == "/charging/api/mode") {
     auto mode = r->arg("mode");
-    int value = mode == "off" ? 0 : mode == "auto" ? 1 : mode == "now" ? 2 : -1;
+    int value = mode == "auto" ? 1 : mode == "always" ? 3 : -1;
     if (value < 0) {
       r->send(400, "application/json", "{\"error\":\"Invalid mode\"}");
-      return;
-    }
-    if (value == 2 && !clock_->now().is_valid()) {
-      r->send(409, "application/json", "{\"error\":\"Waiting for clock\"}");
       return;
     }
     defer([this, value] { request_mode(value); });
@@ -742,20 +689,18 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            "{\"now\":%u,\"mode\":\"%s\",\"reason\":\"%s\",\"relay\":%s,\"soc\":%s,"
            "\"voltage\":%s,\"current\":%s,\"power\":%s,\"price\":%s,\"temp_min\":%s,\"temp_max\":%s,"
            "\"cell_min\":%s,\"cell_max\":%s,\"alarms\":\"%016llx\",\"bms_fresh\":%s,\"bms_age\":%u,"
-           "\"meter_fresh\":%s,\"clock_ok\":%s,\"target\":%.1f,\"ceiling\":%.3f,\"finish\":\"%02u:%02u\","
+           "\"meter_fresh\":%s,\"clock_ok\":%s,"
            "\"capacity_kwh\":%.2f,\"charger_w\":%.0f,\"efficiency\":%.3f,\"deadline\":%u,\"horizon\":%u,"
            "\"estimated_finish\":%u,\"achievable\":%.1f,\"unlikely\":%s,\"provisional\":%s,\"load_w\":%.1f,"
            "\"fetching\":%s,\"price_error\":\"%s\",\"storage_ok\":%s,\"free_heap\":%u,\"largest_block\":%u,"
            "\"min_heap\":%u,\"min_block\":%u,\"uptime\":%u,\"history_days\":%u,"
            "\"reserve_threshold\":%.1f,\"reserve_recovery\":%.1f,\"reserve_active\":%s,"
-           "\"algorithm\":\"compact-mpc-v1\",\"optimizer_ready\":%s,\"decision_until\":%u,"
+           "\"algorithm\":\"compact-mpc-v2\",\"optimizer_ready\":%s,\"decision_until\":%u,"
            "\"forecast_price\":%.3f,\"continuation_price\":%.3f,\"predicted_load_w\":%.2f,"
            "\"marginal_adder\":%.2f,\"charge_efficiency\":%.3f,\"discharge_efficiency\":%.3f,"
            "\"idle_w\":%.2f,\"fallback_load_w\":%.2f,\"optimizer_ms\":%u,\"optimizer_bytes\":%u}",
            in.now,
-           control_.mode == Mode::AUTO  ? "auto"
-           : control_.mode == Mode::NOW ? "now"
-                                        : "off",
+           control_.mode == Mode::ALWAYS ? "always" : "auto",
            reason_text(control_.reason), relay_->state ? "true" : "false",
            num(battery_.soc, soc, sizeof(soc)), num(battery_.voltage, v, sizeof(v)),
            num(battery_.current, a, sizeof(a)), num(meter_w_, power, sizeof(power)),
@@ -763,8 +708,7 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            num(battery_.temp_max, hi, sizeof(hi)), num(battery_.cell_min, minc, sizeof(minc)),
            num(battery_.cell_max, maxc, sizeof(maxc)), static_cast<unsigned long long>(battery_.alarms),
            in.bms_fresh ? "true" : "false", last_bms_ms_ ? (millis() - last_bms_ms_) / 1000 : UINT32_MAX,
-           in.meter_fresh ? "true" : "false", in.clock_ok ? "true" : "false", double(settings_.target),
-           double(settings_.ceiling), settings_.hour, settings_.minute, double(settings_.capacity_kwh),
+           in.meter_fresh ? "true" : "false", in.clock_ok ? "true" : "false", double(settings_.capacity_kwh),
            double(settings_.charger_w), double(settings_.efficiency), plan_.deadline, plan_.horizon,
            plan_.estimated_finish, double(plan_.achievable), plan_.unlikely ? "true" : "false",
            plan_.provisional ? "true" : "false", double(load_w_), fetching_.load() ? "true" : "false",

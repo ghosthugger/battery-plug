@@ -7,8 +7,6 @@
 #include "compact_optimizer.h"
 #include "optimizer_history.h"
 #include "esphome/components/ble_client/ble_client.h"
-#include "esphome/components/datetime/time_entity.h"
-#include "esphome/components/number/number.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/switch/switch.h"
 #include "esphome/components/text_sensor/text_sensor.h"
@@ -33,15 +31,15 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
   void set_relay(switch_::Switch* v) { relay_ = v; }
   void set_power(sensor::Sensor* v) { power_ = v; }
   void set_clock(time::RealTimeClock* v) { clock_ = v; }
-  void set_target(number::Number* v) { target_ = v; }
-  void set_finish(datetime::TimeEntity* v) { finish_ = v; }
   void set_status(text_sensor::TextSensor* v) { status_ = v; }
   void request_mode(int mode);
-  void button_toggle() { request_mode(relay_->state ? 0 : 2); }
+  bool always_charging() const { return control_.mode==charging::Mode::ALWAYS; }
+  void button_toggle() { request_mode(always_charging()?1:3); }
   void overcurrent() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     overcurrent_ = true;
-    request_mode(0);
+    relay_->turn_off();
+    persist_settings_();
     control_.reason = charging::Reason::OVERCURRENT;
   }
   void prepare_ota() {
@@ -58,8 +56,6 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
   switch_::Switch* relay_{};
   sensor::Sensor* power_{};
   time::RealTimeClock* clock_{};
-  number::Number* target_{};
-  datetime::TimeEntity* finish_{};
   text_sensor::TextSensor* status_{};
   charging::Settings settings_{};
   charging::Control control_{};
@@ -75,7 +71,7 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
   size_t price_count_{0};
   nvs_handle_t nvs_{0};
   uint32_t last_bms_ms_{0}, last_power_ms_{0}, tick_ms_{0}, poll_ms_{0}, last_plan_ms_{0}, last_fetch_ms_{0},
-      last_record_ms_{0}, cycle_deadline_{0}, manual_end_{0}, reconnect_ms_{0}, backoff_ms_{5000},
+      last_record_ms_{0}, reconnect_ms_{0}, backoff_ms_{5000},
       min_heap_{UINT32_MAX}, min_block_{UINT32_MAX};
   uint16_t notify_handle_{0}, write_handle_{0};
   charging::DalyFrames frames_{};
@@ -108,7 +104,6 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
   void tick_();
   void record_(const charging::Inputs&, float);
   charging::Inputs inputs_() const;
-  void sync_settings_();
   void persist_settings_();
   void log_event_(unsigned, charging::Reason, float = 0);
   void restore_();

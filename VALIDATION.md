@@ -120,3 +120,19 @@ soak is not considered complete merely because short acceptance tests pass.
 - No 24-hour soak or overnight charging cycle is claimed complete. Detailed
   before/after data and upload log are under `.esphome/optimizer-*`; the committed
   deployment summary is `tests/backtest/deployment.json`.
+
+## Non-expiring Automatic / Always charging modes — 2026-11-05
+
+- Removed Off/Charge now and manual percentage/finish controls from dashboard,
+  diagnostics entities and mode/settings API. Always charging ignores time, price
+  and percentage cutoffs. Both modes persist; old disabled/manual states migrate
+  to Automatic. Recovery cannot be disabled; existing 10–20% limits are preserved.
+- Physical button toggles the two supported modes. Diagnostics Always charging
+  switch OFF means Automatic. Existing data/BMS/OTA protections are retained;
+  overcurrent now persists as its own protective latch, independently of mode.
+- Sanitized native tests passed for legacy regression and non-expiring modes,
+  full SOC, elapsed days, absent clock/prices, fault/resume, mode migration,
+  mandatory recovery, observation history and partial slots. Desktop/mobile
+  fixtures passed with no retired controls or JavaScript errors.
+- Pinned ESPHome build passed. Deployment/live checks are recorded below after
+  verifying both supported modes and restart persistence on the device.

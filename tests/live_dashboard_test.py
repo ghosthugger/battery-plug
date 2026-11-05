@@ -13,14 +13,16 @@ with sync_playwright() as p:
   page.on('pageerror',lambda e:errors.append(str(e)))
   page.goto(base+'/charging/api/status')
   status=json.loads(page.locator('body').inner_text())
-  assert status['algorithm']=='compact-mpc-v1'
+  assert status['algorithm']=='compact-mpc-v2'
   page.goto(base+'/charging')
   page.wait_for_function("document.querySelector('#soc').textContent.includes('%')",timeout=20000)
   page.wait_for_function("document.querySelectorAll('svg').length===5",timeout=20000)
   assert not page.locator('#error').inner_text()
   for key in ['reserve_threshold','reserve_recovery','marginal_adder','charge_efficiency','discharge_efficiency','idle_w']:
    assert float(page.locator('#'+key).input_value())==status[key],key
-  assert 'Manual charge target' in page.locator('body').inner_text()
+  assert page.locator('#target').count()==0 and page.locator('#finish').count()==0
+  assert page.locator('[data-mode=off]').count()==0 and page.locator('[data-mode=now]').count()==0
+  assert page.get_by_role('button',name='Always charging',exact=True).count()==1
   assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
   print(width,'px:',page.locator('#soc').inner_text(),page.locator('#reason').inner_text())
   page.screenshot(path=str(root/'.esphome'/f'live-dashboard-{width}.png'),full_page=True)
