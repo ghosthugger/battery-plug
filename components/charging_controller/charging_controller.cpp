@@ -113,6 +113,10 @@ void Controller::restore_() {
   if (load_record(nvs_, "reserve_end", recovery) && valid_reserve_settings(reserve_threshold_, recovery))
     reserve_recovery_ = recovery;
   load_record(nvs_, "reserve_active", control_.reserve_active);
+  OptimizerSettings optimizer;
+  if (load_record(nvs_, "optimizer_cfg", optimizer) && valid_optimizer_settings(optimizer))
+    optimizer_settings_ = optimizer;
+  load_record(nvs_, "optimizer_hist", optimizer_history_);
   if (control_.mode == Mode::OFF || reserve_threshold_ == 0) control_.reserve_active = false;
   char key[12];
   for (size_t i = 0; i < 24; ++i) {
@@ -178,7 +182,55 @@ void Controller::dump_config() {
 void Controller::on_shutdown() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   relay_->turn_off();
+  persist_optimizer_();
   if (nvs_) nvs_commit(nvs_);
+}
+void Controller::persist_optimizer_() {
+  storage_ok_ &= save_record(nvs_, "optimizer_cfg", optimizer_settings_);
+  storage_ok_ &= save_record(nvs_, "optimizer_hist", optimizer_history_);
+  if (nvs_) nvs_commit(nvs_);
+}
+void Controller::update_optimizer_(const Inputs& in) {
+  uint32_t started=millis();
+  plan_=Plan{};plan_.at=in.now;optimizer_ready_=false;
+  optimizer_until_=in.now/900*900+900;
+  uint32_t contiguous=in.now;
+  for(size_t i=0;i<price_count_;++i) {
+    const auto& x=prices_[i];
+    if(!std::isfinite(x.ore)) continue;
+    if(x.start<=in.now && in.now<x.start+900) {plan_.current=i;plan_.current_price=x.ore;}
+    if(x.start<=contiguous && x.start+900>contiguous) contiguous=x.start+900;
+  }
+  plan_.horizon=contiguous;
+  if(!in.clock_ok || !in.bms_fresh || !std::isfinite(in.soc) || in.soc<0 || in.soc>100 ||
+     plan_.current<0 || reserve_threshold_<=0 || !valid_reserve_settings(reserve_threshold_,reserve_recovery_)) return;
+  optimizer_history_.ingest_prices(in.now,prices_.data(),price_count_);
+  optimizer_history_.price_estimates(in.now,prices_.data(),price_count_,forecast_ore_,continuation_ore_);
+  if(!std::isfinite(forecast_ore_) || !std::isfinite(continuation_ore_)) return;
+  predicted_load_w_=optimizer_history_.load_w(in.now,optimizer_settings_.fallback_load_w);
+  // Workspace exists only during a solve; do not retain a full policy table.
+  auto solver=std::unique_ptr<compact::Solver<101>>(new(std::nothrow) compact::Solver<101>);
+  if(!solver) return;
+  compact::Config p;
+  p.capacity=settings_.capacity_kwh;p.reserve=p.capacity*reserve_threshold_/100;
+  p.recovery=p.capacity*reserve_recovery_/100;p.charge=settings_.charger_w/1000;
+  p.eta_c=optimizer_settings_.charge_efficiency;p.eta_d=optimizer_settings_.discharge_efficiency;
+  p.idle=optimizer_settings_.idle_w/1000;
+  int count=0;
+  for(size_t i=plan_.current;i<price_count_ && prices_[i].start<contiguous;++i)
+    solver->prices[count++]=(prices_[i].ore+optimizer_settings_.marginal_adder)/100;
+  int published=count;
+  for(int j=0;j<96 && count<compact::MAX_HORIZON;++j)
+    solver->prices[count++]=(forecast_ore_+optimizer_settings_.marginal_adder)/100;
+  plan_.deadline=in.now/900*900+count*900;plan_.provisional=count>published;
+  double terminal=std::max(0.f,continuation_ore_+optimizer_settings_.marginal_adder)/100/p.eta_c;
+  optimizer_request_=solver->choose(p,count,predicted_load_w_/1000,in.soc*p.capacity/100,
+      control_.reserve_active,relay_->state?1:0,terminal,(optimizer_until_-in.now)/3600.)==1;
+  optimizer_ready_=true;
+  if(optimizer_request_) plan_.seconds[plan_.current]=optimizer_until_-in.now;
+  optimizer_ms_=millis()-started;
+  min_heap_=std::min(min_heap_,uint32_t(heap_caps_get_free_size(MALLOC_CAP_8BIT)));
+  min_block_=std::min(min_block_,uint32_t(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
 }
 void Controller::sync_settings_() {
   auto t = finish_->state_as_esptime();
@@ -318,7 +370,7 @@ void Controller::tick_() {
     network_enabled_ = true;
     log_event_(0, Reason::OFF);
   }
-  if (cycle_deadline_ && in.clock_ok && in.now >= cycle_deadline_) {
+  if (control_.mode != Mode::AUTO && cycle_deadline_ && in.clock_ok && in.now >= cycle_deadline_) {
     bool met = in.bms_fresh && in.soc >= settings_.target;
     history_.deadline(cycle_deadline_ - 1, met);
     persist_history_(cycle_deadline_ - 1);
@@ -327,15 +379,35 @@ void Controller::tick_() {
     cycle_deadline_ = 0;
     plan_dirty_ = true;
   }
-  if (in.clock_ok && (plan_dirty_ || ms - last_plan_ms_ >= 60000 ||
-                      (plan_.current >= 0 && in.now >= prices_[plan_.current].start + 900))) {
-    plan_ = make_plan(settings_, in, prices_.data(), price_count_);
+  bool automatic=control_.mode==Mode::AUTO;
+  bool replan=automatic ? (plan_dirty_ || in.now>=optimizer_until_) :
+      (plan_dirty_ || ms-last_plan_ms_>=60000 ||
+       (plan_.current>=0 && in.now>=prices_[plan_.current].start+900));
+  if (in.clock_ok && replan && (!automatic || !fetching_.load())) {
+    if(automatic) update_optimizer_(in);
+    else {
+      plan_ = make_plan(settings_, in, prices_.data(), price_count_);
+      // There is no committed automatic schedule in Off/Charge now modes.
+      plan_.seconds.fill(0);
+      if(control_.mode==Mode::NOW && plan_.current>=0)
+        plan_.seconds[plan_.current]=prices_[plan_.current].start+900-in.now;
+    }
     last_plan_ms_ = ms;
     plan_dirty_ = false;
-    if (control_.mode == Mode::AUTO && !cycle_deadline_) cycle_deadline_ = plan_.deadline;
+    if (!automatic && !cycle_deadline_) cycle_deadline_ = plan_.deadline;
+  }
+  if(automatic) {
+    // A fetch may still be running when a slot ends. A short hold of the last
+    // economic choice must never turn a missing/expired price into a valid one.
+    plan_.current=-1;plan_.current_price=UNKNOWN;
+    for(size_t i=0;i<price_count_;++i)
+      if(prices_[i].start<=in.now && in.now<prices_[i].start+900 && std::isfinite(prices_[i].ore)) {
+        plan_.current=i;plan_.current_price=prices_[i].ore;break;
+      }
   }
   bool was_reserve = control_.reserve_active;
-  bool desired = control_.evaluate(settings_, in, plan_, prices_.data(), reserve_threshold_, reserve_recovery_);
+  bool desired = control_.evaluate_optimized(settings_, in, plan_, prices_.data(),
+      optimizer_ready_ && in.now<optimizer_until_+30,optimizer_request_,reserve_threshold_,reserve_recovery_);
   if (was_reserve != control_.reserve_active) {
     storage_ok_ &= save_record(nvs_, "reserve_active", control_.reserve_active);
     if (nvs_) storage_ok_ &= nvs_commit(nvs_) == ESP_OK;
@@ -381,6 +453,7 @@ void Controller::loop() {
     last_bms_ms_ = ms;
     if (!had_bms_) {
       had_bms_ = true;
+      plan_dirty_ = true;
       log_event_(5, Reason::BMS, 1);
     }
     if (!std::isfinite(old) || std::abs(old - battery_.soc) >= 0.5f) plan_dirty_ = true;
@@ -391,6 +464,15 @@ void Controller::loop() {
       float observed = std::clamp(net + load_w_, 0.0f, settings_.charger_w);
       gross_charge_w_ = 0.9f * gross_charge_w_ + 0.1f * observed;
     }
+    uint32_t now=clock_->now().timestamp;
+    if(clock_->now().is_valid()) {
+      if(!relay_->state && !ota_ && std::isfinite(net))
+        optimizer_history_.observe_load(now,std::max(0.f,(-net-optimizer_settings_.idle_w)*
+            optimizer_settings_.discharge_efficiency),observation_ms_?(ms-observation_ms_)/1000.f:0);
+      if(observation_hour_ && observation_hour_!=now/3600) persist_optimizer_();
+      observation_hour_=now/3600;
+    }
+    observation_ms_=ms;
     backoff_ms_ = 5000;
   }
   if (connected_ && ms - poll_ms_ >= 10000) {
@@ -561,10 +643,12 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
   }
   if (r->method() == HTTP_POST && u == "/charging/api/settings") {
     Settings s;
+    OptimizerSettings optimizer;
     float reserve, recovery;
     {
       std::lock_guard<std::recursive_mutex> lock(mutex_);
       s = settings_;
+      optimizer = optimizer_settings_;
       reserve = reserve_threshold_;
       recovery = reserve_recovery_;
     }
@@ -581,7 +665,12 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
                  valid_reserve_settings(reserve, recovery) &&
                  read("target", s.target) && read("ceiling", s.ceiling) &&
                  read("capacity_kwh", s.capacity_kwh) && read("charger_w", s.charger_w) &&
-                 read("efficiency", s.efficiency);
+                 read("efficiency", s.efficiency) &&
+                 read("marginal_adder",optimizer.marginal_adder) &&
+                 read("charge_efficiency",optimizer.charge_efficiency) &&
+                 read("discharge_efficiency",optimizer.discharge_efficiency) &&
+                 read("idle_w",optimizer.idle_w) && read("fallback_load_w",optimizer.fallback_load_w) &&
+                 valid_optimizer_settings(optimizer);
     if (r->hasArg("finish")) {
       auto v = r->arg("finish");
       int h, m;
@@ -597,9 +686,13 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
       r->send(400, "application/json", "{\"error\":\"Invalid settings\"}");
       return;
     }
-    defer([this, s, reserve, recovery] {
+    defer([this, s, optimizer, reserve, recovery] {
       std::lock_guard<std::recursive_mutex> lock(mutex_);
+      if(optimizer.discharge_efficiency!=optimizer_settings_.discharge_efficiency ||
+          optimizer.idle_w!=optimizer_settings_.idle_w)
+        for(auto& h:optimizer_history_.hours) {h.load_wh=0;h.off_seconds=0;}
       settings_ = s;
+      optimizer_settings_ = optimizer;
       reserve_threshold_ = reserve;
       reserve_recovery_ = recovery;
       if (reserve == 0) control_.reserve_active = false;
@@ -616,6 +709,7 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
       control_.target_latched = false;
       plan_dirty_ = true;
       persist_settings_();
+      persist_optimizer_();
       log_event_(6, Reason::OFF);
     });
     r->send(200, "application/json", "{\"ok\":true}");
@@ -641,7 +735,7 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
 void Controller::status_json_(AsyncWebServerRequest* r) {
   std::unique_lock<std::recursive_mutex> lock(mutex_);
   auto in = inputs_();
-  auto buffer = std::make_unique<std::array<char, 2200>>();
+  auto buffer = std::make_unique<std::array<char, 2700>>();
   auto* b = buffer->data();
   char soc[24], v[24], a[24], price[24], lo[24], hi[24], minc[24], maxc[24], power[24];
   snprintf(b, buffer->size(),
@@ -653,7 +747,11 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            "\"estimated_finish\":%u,\"achievable\":%.1f,\"unlikely\":%s,\"provisional\":%s,\"load_w\":%.1f,"
            "\"fetching\":%s,\"price_error\":\"%s\",\"storage_ok\":%s,\"free_heap\":%u,\"largest_block\":%u,"
            "\"min_heap\":%u,\"min_block\":%u,\"uptime\":%u,\"history_days\":%u,"
-           "\"reserve_threshold\":%.1f,\"reserve_recovery\":%.1f,\"reserve_active\":%s}",
+           "\"reserve_threshold\":%.1f,\"reserve_recovery\":%.1f,\"reserve_active\":%s,"
+           "\"algorithm\":\"compact-mpc-v1\",\"optimizer_ready\":%s,\"decision_until\":%u,"
+           "\"forecast_price\":%.3f,\"continuation_price\":%.3f,\"predicted_load_w\":%.2f,"
+           "\"marginal_adder\":%.2f,\"charge_efficiency\":%.3f,\"discharge_efficiency\":%.3f,"
+           "\"idle_w\":%.2f,\"fallback_load_w\":%.2f,\"optimizer_ms\":%u,\"optimizer_bytes\":%u}",
            in.now,
            control_.mode == Mode::AUTO  ? "auto"
            : control_.mode == Mode::NOW ? "now"
@@ -673,7 +771,13 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            fetch_error_, storage_ok_ ? "true" : "false", unsigned(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
            unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)), min_heap_, min_block_,
            millis() / 1000, unsigned(RETAINED_DAYS), double(reserve_threshold_),
-           double(reserve_recovery_), control_.reserve_active ? "true" : "false");
+           double(reserve_recovery_), control_.reserve_active ? "true" : "false",
+           optimizer_ready_?"true":"false",optimizer_until_,
+           double(std::isfinite(forecast_ore_)?forecast_ore_:0),
+           double(std::isfinite(continuation_ore_)?continuation_ore_:0),double(predicted_load_w_),
+           double(optimizer_settings_.marginal_adder),double(optimizer_settings_.charge_efficiency),
+           double(optimizer_settings_.discharge_efficiency),double(optimizer_settings_.idle_w),
+           double(optimizer_settings_.fallback_load_w),optimizer_ms_,unsigned(sizeof(compact::Solver<101>)));
   lock.unlock();  // Never let a slow HTTP client block relay supervision.
   r->send(200, "application/json", b);
 }

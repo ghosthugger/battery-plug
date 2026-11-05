@@ -142,3 +142,62 @@ using browser-rendered SVG charts without external dependencies.
 
 Completion means independent BMS reads, SE3 fetches, charging control with these
 rules, an explanatory dashboard and retention that meets measured limits.
+
+## Addition: compact cost optimiser — 2026-11-05
+
+This addition supersedes the original Automatic target/deadline/price-ceiling
+scheduler. Manual Charge now retains the existing target and finish time. The
+old ceiling remains in stored settings/API for compatibility but does not limit
+Automatic. Automatic may charge beyond the manual target, up to physical full.
+There is no invented ability to supply mains without charging the battery.
+
+Use a native, fixed-memory dynamic programme with 101 energy levels, float32
+values and two recovery-latch states. Recalculate every quarter hour and after
+settings or published-price changes. Model battery supply versus mains supply
+plus automatic full-rate charging; cap charging only when physically full.
+Model charge/discharge efficiencies and battery-mode inverter idle draw.
+Continue to apply read-only BMS, meter, overcurrent, OTA and manual-Off stops.
+Keep the configured recovery start/stop and its persistent latch authoritative.
+Automatic requires an enabled reserve threshold above 0%; disabling recovery
+also suspends economic Automatic decisions. Manual controls remain available.
+
+Use published SE3 prices plus up to 24 hours of flat forecast. Forecast price is
+the median of completed hourly prices retained over the last seven days; stored
+energy continuation value uses their low quartile divided by charge efficiency.
+Before historical prices exist, use currently published prices as the initial
+estimate. Forecast intervals are estimates, never substitutes for a missing
+current price. A configurable gross marginal adder (default 70 öre/kWh) accounts
+for variable tax/grid/supplier costs; it is an assumption to match to the bill.
+
+Estimate appliance AC draw from read-only battery DC draw while mains is off,
+subtracting idle draw and accounting for inverter efficiency. Use a bounded
+seven-day hourly weighted mean; initial fallback 60 W. Do not assume the combined
+plug meter can separate charging and appliance consumption on mains. Persist
+bounded price/load history hourly and on configuration changes/restart. Initial
+physical estimates: charge/discharge efficiency 90%, idle 10 W; all editable.
+
+The solver workspace is allocated only during planning, is 7680 bytes on the
+native float32 build, and retains no full policy table. Price/load history is
+2704 bytes. Avoid overlapping a solve with the HTTPS fetch task. Account for a
+partial current quarter-hour. Keep all application partitions and OTA support.
+
+Dashboard: distinguish Automatic from manual-only target/finish settings. Show
+forecast price, additional variable charges, estimated appliance draw, next
+quarter-hour decision, solver time and workspace. Display published prices and
+only the next committed mains decision; do not imply a fixed future schedule.
+Existing charts retain spot+VAT cost accounting, explicitly excluding the adder.
+Do not claim measured financial savings on the live page.
+
+Offline acceptance: use the existing validated SE3 Aug–Oct 2026 trace and the
+same 4 kWh/400 W fridge/freezer scenario. Include the actual 10–20% recovery latch,
+finite observability, 101vs201/401/601/1001 energy levels, float32vsfloat64,
+late price publication, heavier load and inverter-idle sensitivity. Publish grid
+bill, common end-energy settlement, savings and source transfers. Verify energy
+balances, fault/manual/recovery precedence, future-price causality and boundary
+transitions independently. Confirm desktop/mobile UI and pinned ESPHome build.
+
+Deployment: commit reviewed source and validation before uploading the OTA image.
+Retain the pre-change image under `.esphome/pre-optimizer` for rollback. Verify the
+installed algorithm identifier, existing settings/history, BMS freshness, price
+fetch, decisions, restart behavior and runtime heap/latency. A 24-hour soak is
+separate follow-up evidence, not a prerequisite falsely marked complete here.

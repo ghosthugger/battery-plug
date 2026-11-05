@@ -14,7 +14,7 @@ state = dict(now=NOW, mode='off', reason='Off', relay=False, soc=72.3, voltage=1
              horizon=NOW+40000, estimated_finish=NOW+36000, achievable=90, unlikely=False,
              provisional=True, load_w=42, fetching=False, price_error='', storage_ok=True,
              free_heap=100000, largest_block=50000, min_heap=90000, min_block=45000,
-             uptime=3600, history_days=180, reserve_threshold=5, reserve_recovery=10, reserve_active=False)
+             uptime=3600, history_days=180, reserve_threshold=5, reserve_recovery=10, reserve_active=False, algorithm='compact-mpc-v1', optimizer_ready=True, decision_until=NOW+900, forecast_price=80, continuation_price=45, predicted_load_w=65, marginal_adder=70, charge_efficiency=.9, discharge_efficiency=.9, idle_w=10, fallback_load_w=60, optimizer_ms=90, optimizer_bytes=7680)
 history = [dict(time=NOW-86400+i*300, soc=50+i/10, soc_min=50+i/10, soc_max=51+i/10,
                 power=400 if i%20<10 else 0, on_seconds=300 if i%20<10 else 0, coverage=300,
                 price=50+i%80, ceiling=100, energy_kwh=.033 if i%20<10 else 0,
@@ -54,9 +54,12 @@ with sync_playwright() as p:
         page.locator('#reserve_threshold').fill('7')
         page.locator('#reserve_recovery').fill('30')
         page.locator('#target').fill('85')
+        page.locator('#marginal_adder').fill('65')
+        assert 'Automatic cost optimisation' in page.locator('#planning').inner_text() if state['mode']=='auto' else True
+        assert 'Manual charge target' in page.locator('body').inner_text()
         page.get_by_role('button',name='Save settings',exact=True).click()
         page.wait_for_function("document.querySelector('#saved').textContent.includes('saved')")
-        assert state['target']==85 and state['reserve_threshold']==7 and state['reserve_recovery']==30
+        assert state['target']==85 and state['reserve_threshold']==7 and state['reserve_recovery']==30 and state['marginal_adder']==65
         page.locator('#reserve_recovery').fill('7')
         page.get_by_role('button',name='Save settings',exact=True).click()
         page.wait_for_function("document.querySelector('#error').textContent.includes('above')")

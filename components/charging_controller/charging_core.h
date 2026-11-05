@@ -32,7 +32,8 @@ enum class Reason : uint8_t {
   OVERCURRENT,
   OTA,
   COOLDOWN,
-  LOW_BATTERY
+  LOW_BATTERY,
+  PLANNER
 };
 inline const char* reason_text(Reason r) {
   static const char* names[] = {"Off",
@@ -50,7 +51,8 @@ inline const char* reason_text(Reason r) {
                                 "Overcurrent protection",
                                 "Firmware update in progress",
                                 "Waiting for switch cooldown",
-                                "Low battery: restoring mains"};
+                                "Low battery: restoring mains",
+                                "Waiting for optimiser settings or price data"};
   return names[static_cast<unsigned>(r)];
 }
 struct Settings {
@@ -439,6 +441,29 @@ class Control {
       on = want;
       last_switch = in.now;
     }
+    return on;
+  }
+  // Automatic cost control has no daily target/deadline/ceiling. All existing
+  // data/fault checks and the persistent low-battery recovery remain authoritative.
+  bool evaluate_optimized(const Settings& s, const Inputs& in, const Plan& p, const Price* prices,
+                          bool ready, bool request, float start, float stop) {
+    if (mode != Mode::AUTO) return evaluate(s,in,p,prices,start,stop);
+    if (start<=0 || !valid_reserve_settings(start,stop)) reserve_active=false;
+    else if (in.bms_fresh && std::isfinite(in.soc) && in.soc>=0 && in.soc<=100) {
+      if (in.soc<=start) reserve_active=true;
+      else if (in.soc>=stop) reserve_active=false;
+    }
+    bool want=false,immediate=true;
+    if (!in.clock_ok && !reserve_active) reason=Reason::CLOCK;
+    else if (!in.bms_fresh || !std::isfinite(in.soc) || in.soc<0 || in.soc>100) reason=Reason::BMS;
+    else if (!in.meter_fresh) reason=Reason::METER;
+    else if (in.fault) reason=Reason::FAULT;
+    else if (reserve_active) {want=true;reason=Reason::LOW_BATTERY;}
+    else if (p.current<0) reason=Reason::PRICE_UNKNOWN;
+    else if (!ready) reason=Reason::PLANNER;
+    else {want=request;reason=want?Reason::CHARGING:Reason::WAITING;immediate=false;}
+    if (want!=on && !immediate && in.now-last_switch<120) {reason=Reason::COOLDOWN;return on;}
+    if (want!=on) {on=want;last_switch=in.now;}
     return on;
   }
 };

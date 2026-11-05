@@ -4,6 +4,8 @@
 
 #include "esphome/core/defines.h"
 #include "charging_core.h"
+#include "compact_optimizer.h"
+#include "optimizer_history.h"
 #include "esphome/components/ble_client/ble_client.h"
 #include "esphome/components/datetime/time_entity.h"
 #include "esphome/components/number/number.h"
@@ -64,6 +66,11 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
   charging::Plan plan_{};
   charging::Battery battery_{};
   charging::History history_{};
+  charging::OptimizerSettings optimizer_settings_{};
+  charging::OptimizerHistory optimizer_history_{};
+  bool optimizer_ready_{false}, optimizer_request_{false};
+  float forecast_ore_{charging::UNKNOWN}, continuation_ore_{charging::UNKNOWN}, predicted_load_w_{60};
+  uint32_t optimizer_until_{0}, optimizer_ms_{0}, observation_ms_{0}, observation_hour_{0};
   std::array<charging::Price, charging::PRICE_COUNT> prices_{};
   size_t price_count_{0};
   nvs_handle_t nvs_{0};
@@ -86,7 +93,8 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
     uint32_t rate_time{0};
     char error[96]{};
   };
-  static_assert(sizeof(charging::History) + sizeof(charging::Plan) + sizeof(prices_) + sizeof(FetchResult) <
+  static_assert(sizeof(charging::History) + sizeof(charging::Plan) + sizeof(prices_) + sizeof(FetchResult) +
+                    sizeof(charging::OptimizerHistory) <
                     24 * 1024,
                 "Retained history/prices, including fetch staging, exceed the RAM budget");
   FetchResult fetch_result_{};
@@ -106,6 +114,8 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
   void restore_();
   void persist_history_(uint32_t);
   void save_prices_();
+  void update_optimizer_(const charging::Inputs&);
+  void persist_optimizer_();
   void start_fetch_();
   static void fetch_task_(void*);
   void status_json_(AsyncWebServerRequest*);

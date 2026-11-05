@@ -1,0 +1,98 @@
+Compact battery optimiser — offline acceptance, 5 November 2026
+
+Production core: components/charging_controller/compact_optimizer.h, shared
+unchanged by native historical replay and firmware. 101 energy levels, float32,
+2 recovery states, 7680-byte transient workspace; 2704-byte observation history.
+
+Historical input: tests/backtest/se3-fridge-freezer-input.csv. SE3 NordPool-derived
+quarter-hour prices obtained through Elklocka's Gridio source, not directly from
+the exchange. SEK conversion reconstructed from daily reference averages, with
+independent daily extrema and ECB FX plausibility checks in the original study.
+Sources:
+ https://www.elklocka.se/
+ https://private.gridio.energy/api/v1/service_providers/0191e65f-72a3-72ee-8441-92abaf2d6d8a/prices
+ https://elprisdata.se/data/elpris-se3-2026.csv
+ https://elprisdata.se/data/
+ https://api.frankfurter.dev/v1/2026-06-25..2026-11-01?base=EUR&symbols=SEK
+Synthetic appliance load: randomized compressor cycles plus daily defrost,
+original seed 20261105; minute power averaged into 15-minute intervals, scaled using
+July only to 1.5 kWh/day. Evaluation actual 136.75349kWh. This is not measured freezer
+consumption. Input SHA256: 14d912580ee5b53d6417207bec698d92c950eda7de8c5db0950fade3ef6955db.
+
+Evaluation: 1 Aug–31 Oct 2026, 92 Stockholm calendar days, 2209 elapsed hours, 8836 slots;
+next-day prices become available 13:15 local (assumption, not historical release
+records). UTC timestamps preserve the autumn DST interval. July is prior data.
+No future actual consumption is supplied to the controller. Off-only observed
+appliance power is averaged across seven days, with 60 W boot fallback. Price
+forecast is the median of seven days of completed hourly prices; continuation
+value is the low quartile divided by charge efficiency. Initial forecast uses
+already-published prices. Each 15 minutes the first action is recomputed at actual SOC.
+
+Physical model: 4 kWh, 400 W AC charger exclusive of appliance load, 90% charge and
+90% inverter efficiencies, 10 W DC inverter idle only on battery. Initial SOC 50%,
+physical full 100%, 10% recovery start/20% release. Recovery is latched and modeled
+with event-driven threshold crossings. Mains always supplies appliances AND
+charges, capped only at full. No optional mains-without-charging mode, no BMS
+MOS writes, no solar/export, price ceiling, deadline or daily SOC reset.
+Prices: spot including 25% VAT + assumed 0.70SEK/kWh variable adder. Fixed fees,
+demand charges, capital cost and battery wear excluded. Bill plus/minus final
+inventory settlement at common July-derived 1.013528718SEK/battery-kWh; this is
+neither export revenue nor physically restoring SOC. All policies start 50%.
+
+Main results, SEK over 92 days:
+ Direct mains appliance bill                 231.125
+ Compact 101 physical grid bill               184.865
+ Compact 101 end-inventory-adjusted cost      186.459
+ Compact 101 net saving                       44.666 (19.3%)
+ End SOC                                    10.683%
+ Source transfers                           542 (5.9/day)
+
+Current firmware comparison: unchanged old production scheduling core replay,
+same physical price/load assumptions, target 100%, ceiling 100 öre, deadline 07:00,
+reserve10–20%. Saving 9.407SEK. Earlier target 90% variant saved 5.595SEK.
+The target 100% reference corresponds to the user's fresh 5 November status.
+The earlier high-resolution flat-forecast benchmark saved 46.896SEK, but used
+longer/full-history estimates and a simpler reserve guard; it is a comparator,
+not the exact compact implementation. Approximate hindsight reference 58.400SEK.
+
+Resolution check savings: 101 nodes 44.666; 201 nodes 44.468; 401 nodes 44.629;
+601 nodes 44.639; 1001 nodes 44.421. Float64 at 101 nodes gave the same savings and
+trajectory as float32. This is empirical convergence, not an optimality proof.
+At each fixed state, continuation is linearly interpolated rather than rounded
+SOC. Independent short-horizon exhaustive checks found up to 0.0147 SEK first-action
+regret at 101 nodes in tested partial quarters; 1001-node choices matched brute force.
+
+Sensitivity savings (101 nodes, parameters supplied to model match plant):
+ 2.4kWh/day demand                         60.733SEK (baseline 369.800)
+ 20W inverter idle instead of 10 W           22.664SEK
+ 15:00 publication instead of 13:15         41.093SEK
+ Complete past-load observability          44.635SEK
+ Original longer-history forecast variant  46.865SEK
+These are diagnostics, not tuned settings recommendations. Hardware efficiency
+and idle draw need real measurements before translating to household savings.
+
+Verification: independent plant and numerical checks cover 502 plant transitions,
+including narrow-band repeated cycles; 516 solver cases with exhaustive binary
+short-horizon search, linear interpolation reference and partial first quarters;
+future-price/consumption mutation checks; independent full-trace energy, supply,
+reserve-latch and monetary accounting. Exact counts/current core hash are in
+verification.json. Native ASan/UBSan controller tests include fault precedence,
+manual/Automatic distinction, reserve hysteresis and observation history. UI
+fixture tests cover desktop/mobile settings, modes and charts. No on-device
+execution speed or runtime heap is inferred from desktop timing.
+
+Limits: uniform demand within each 15 minutes; healthy exact BMS/meter readings;
+charger fixed-rate until full rather than taper; no compressor surge/transfer
+interruption model; ideal bypass has no extra standby draw. Actual firmware
+samples BMS every 10 s and retains a two-minute ordinary switch cooldown. Recovery
+is immediate at a fresh sample; slight threshold over/undershoot is possible.
+Firmware fetch phase/latency, cached daily FX, cold start partway through a day
+and observation quantisation differ from the standardized offline feed.
+Study horizons are capped at evaluation end; the live controller has no artificial
+end date. Results demonstrate performance in these scenarios, not future savings.
+
+Reproduce from repository root with NumPy and pandas available:
+ python tools/backtest_optimizer.py
+ python tests/backtest/verify_optimizer.py
+Results go under .esphome/optimizer-backtest. Only native offline files are used;
+these scripts never contact the plug. See results.csv/results.json/verification.json.

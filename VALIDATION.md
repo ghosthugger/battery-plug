@@ -73,3 +73,33 @@ soak is not considered complete merely because short acceptance tests pass.
   at the start threshold. Live API checks reject below/equal/out-of-range/NaN
   values. A 30% stop persisted across an actual restart; original 5%/10% limits
   were restored. No charging was triggered by this configuration test.
+
+## Compact cost optimiser — 2026-11-05
+
+- Native production core backtested on the previously validated SE3 Aug–Oct
+  quarter-hour trace and synthetic fridge/freezer load: **44.666 SEK saving**
+  versus a 231.125 SEK direct-mains baseline. The old controller with the user's
+  latest 100% target/100-öre ceiling saved 9.407 SEK under the same assumptions.
+  These are modeled costs, not measured household savings.
+- Models the actual two modes and configured 10–20% recovery latch; no mains-only
+  action or BMS MOS writes. On-device-feasible seven-day price/load estimates,
+  off-only consumption observations, float32/101 energy levels. 1001 levels
+  gave 44.421 SEK; float64 at 101 levels gave the identical base trajectory.
+- Independent verifier: 502 physical transitions, 516 solver cases, future-price
+  causality tests and 53,016 saved trace intervals passed. Native ASan/UBSan tests
+  pass with both 0/180-day core history configurations and cover Automatic/manual
+  differences, fault/Off precedence, recovery, partial slots and bounded history.
+- Desktop/mobile browser fixtures pass with all charts and new editable model
+  settings; no JS errors or horizontal overflow. Plan and README updated.
+- ESPHome 2026.10.1 final build: OTA image 1,600,416 bytes; application slot
+  1,835,008 bytes, leaving 234,592 bytes. Transient solver workspace 7,680 bytes;
+  bounded observation history 2,704 bytes. Solver and HTTPS fetch do not overlap.
+- Detailed source/data hashes, results and independent verification are committed
+  under `tests/backtest/`. The old OTA image is retained locally under
+  `.esphome/pre-optimizer/firmware.ota.bin`.
+- Deployment/live acceptance is pending upload. Direct Terminal LAN access works;
+  the detached background session could not reach the LAN. User-supplied
+  fresh status confirms the previous firmware remains online, target 100%,
+  reserve 10–20%, healthy BMS/meter, no alarms. No deployment or 24-hour soak is
+  claimed by these offline checks. Firmware preserves existing NVS settings and
+  adds separately versioned/checksummed optimiser settings/history records.

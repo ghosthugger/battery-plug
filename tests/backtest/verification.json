@@ -1,0 +1,96 @@
+{
+  "status": "PASS",
+  "core_source": "components/charging_controller/compact_optimizer.h",
+  "core_sha256": "000c18c85eacde81c0f8e70925c90196511f88dc7be68f1b4c0767ee5aa79f76",
+  "sources_sha256": {
+    "components/charging_controller/compact_optimizer.h": "000c18c85eacde81c0f8e70925c90196511f88dc7be68f1b4c0767ee5aa79f76",
+    "tools/backtest_optimizer.py": "c29d3a9eca051c7e7dd312b5e426c63d08b27224a9aa5ce466b6f4586f97185b",
+    "tools/optimizer_replay.cpp": "0f93835d2531998cc957960d860eba5c451c2e3565ffac75ef2b1a304c4148b3",
+    "tests/backtest/verify_optimizer.py": "5d94f2969457a2cdf9b196a309ea138de23c63f6b9250702020725a5aa7926cd",
+    "tests/backtest/verifier_bridge.cpp": "7ed1787b29cd6eea5ee583325294dbdd511d01b200a7c80feaca28e8e105ad8d",
+    "tests/backtest/se3-fridge-freezer-input.csv": "14d912580ee5b53d6417207bec698d92c950eda7de8c5db0950fade3ef6955db"
+  },
+  "plant": {
+    "cases": 502,
+    "small_step_seconds": 0.5,
+    "max_small_step_field_error": 0.001033333333333341,
+    "narrow_hysteresis_regression": "PASS",
+    "narrow_case_internal_transfers": 260
+  },
+  "solver": {
+    "cases": 516,
+    "horizon_max": 9,
+    "brute_force": "all binary action sequences",
+    "independent_float64_grid_q_check": "PASS",
+    "worst_q_error_sek": {
+      "101_f": 0.21880704151328706,
+      "101_d": 0.21880700873447229,
+      "1001_d": 0.10581080437433271,
+      "10001_d": 2.3726808023871726e-05
+    },
+    "worst_first_action_regret_sek": {
+      "101_f": 0.014667799796011849,
+      "101_d": 0.014667799796011849,
+      "1001_d": 0.0,
+      "10001_d": 0.0
+    },
+    "max_float32_vs_float64_q_sek": 8.959695483312657e-07,
+    "float32_vs_float64_action_differences": 0,
+    "note": "Finite-case approximation checks; not a global optimality certificate. Tolerances are predeclared in verifier."
+  },
+  "forecast_causality": {
+    "status": "PASS",
+    "actual_prepare_mutation_pairs": 16,
+    "actual_runner_mutations": 4,
+    "checked": "Withheld prices and current/future actual load do not alter decision inputs or requests through mutation time.",
+    "methodology_note": "Verified actual bounded definition: seven-day completed hourly history since startup, published-only startup fallback, rolling terminal valuation and prior off-mode load observations."
+  },
+  "runner_artifacts": {
+    "status": "PASS",
+    "cases": [
+      {
+        "name": "compact_101",
+        "slots": 8836,
+        "saving_sek": 44.66592968538689,
+        "source_transfers": 542,
+        "max_energy_error_kwh": 4.219735671995295e-12
+      },
+      {
+        "name": "compact_1001",
+        "slots": 8836,
+        "saving_sek": 44.42070345543621,
+        "source_transfers": 523,
+        "max_energy_error_kwh": 5.511369138844202e-12
+      },
+      {
+        "name": "compact_101_float64",
+        "slots": 8836,
+        "saving_sek": 44.66592968538689,
+        "source_transfers": 542,
+        "max_energy_error_kwh": 4.219735671995295e-12
+      },
+      {
+        "name": "compact_101_high_load",
+        "slots": 8836,
+        "saving_sek": 60.732830505931986,
+        "source_transfers": 636,
+        "max_energy_error_kwh": 1.641065061619429e-10
+      },
+      {
+        "name": "compact_101_idle20W",
+        "slots": 8836,
+        "saving_sek": 22.66441570643353,
+        "source_transfers": 421,
+        "max_energy_error_kwh": 3.953615212992645e-12
+      },
+      {
+        "name": "compact_101_late_publication",
+        "slots": 8836,
+        "saving_sek": 41.09292366487529,
+        "source_transfers": 538,
+        "max_energy_error_kwh": 4.242828310907498e-12
+      }
+    ],
+    "checked": "All trace slots independently replayed; prior off-only load estimates, physical state, latches, transfers and monetary settlement checked."
+  }
+}
