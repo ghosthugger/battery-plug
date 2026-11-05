@@ -69,6 +69,9 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
   bool savings_continuous_{false};
   uint32_t savings_saved_ms_{0}, output_changed_ms_{0};
   bool optimizer_ready_{false}, optimizer_request_{false};
+  // Display-only, indexed by published prices; never drives relay control.
+  std::array<uint16_t,charging::PRICE_COUNT> projected_mains_{};
+  bool projection_ready_{false};
   float forecast_ore_{charging::UNKNOWN}, continuation_ore_{charging::UNKNOWN}, predicted_load_w_{60};
   uint32_t optimizer_until_{0}, optimizer_ms_{0}, observation_ms_{0}, observation_hour_{0};
   std::array<charging::Price, charging::PRICE_COUNT> prices_{};

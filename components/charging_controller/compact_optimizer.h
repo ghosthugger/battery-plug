@@ -67,6 +67,22 @@ inline Outcome advance(double energy,bool latched,int requested,double load,cons
   o.latched=latched;
   return o;
 }
+// Display-only policy: one bit per time/latch/SOC node, allocated only while
+// solving. The current action still uses continuous measured SOC and exact Qs.
+template<int N> struct Policy {
+  std::array<uint8_t,(MAX_HORIZON*2*N+7)/8> bits{};
+  void set(int t,int latch,int i,bool on) {
+    size_t bit=(t*2+latch)*N+i;
+    uint8_t mask=uint8_t(1u<<(bit%8));
+    if(on) bits[bit/8]|=mask; else bits[bit/8]&=uint8_t(~mask);
+  }
+  int action(int t,bool latch,double energy,const Config& p) const {
+    int i=int(std::lround(std::clamp((energy-p.reserve)/(p.capacity-p.reserve),0.,1.)*(N-1)));
+    size_t bit=(t*2+int(latch))*N+i;
+    return (bits[bit/8]>>(bit%8))&1;
+  }
+};
+static_assert(sizeof(Policy<101>)<8*1024,"Display policy exceeds temporary RAM budget");
 template<int N,typename Real=float> class Solver {
  public:
   // Interpolation geometry reused for every stage of a constant-load forecast.
@@ -86,7 +102,7 @@ template<int N,typename Real=float> class Solver {
     return a+e.weight*(b-a);
   }
   int choose(const Config& p,int count,double predicted_load,double energy,bool latch,int previous,double terminal,
-             double first_hours=-1) {
+             double first_hours=-1,Policy<N>* policy=nullptr) {
     int next=0,cur=1;
     for(int l=0;l<2;++l) for(int i=0;i<N;++i) {
       double e=p.reserve+(p.capacity-p.reserve)*i/(N-1);
@@ -97,9 +113,12 @@ template<int N,typename Real=float> class Solver {
     for(int t=count-1;t>=1;--t) {
       for(int l=0;l<2;++l) for(int i=0;i<N;++i) {
         Real best=std::numeric_limits<Real>::infinity();
+        Real off=0;
         for(int a=0;a<2;++a) {
           const auto& g=edges[l][a][i];
           Real q=prices[t]*g.grid+continuation(g,values[next]);
+          if(a==0) off=q;
+          else if(policy) policy->set(t,l,i,q<off);
           best=std::min(best,q);
         }
         values[cur][l][i]=best;

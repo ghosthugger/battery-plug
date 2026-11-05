@@ -200,6 +200,7 @@ void Controller::persist_optimizer_() {
 void Controller::update_optimizer_(const Inputs& in) {
   uint32_t started=millis();
   plan_=Plan{};plan_.at=in.now;optimizer_ready_=false;
+  projection_ready_=false;projected_mains_.fill(0);
   optimizer_until_=in.now/900*900+900;
   uint32_t contiguous=in.now;
   for(size_t i=0;i<price_count_;++i) {
@@ -231,10 +232,26 @@ void Controller::update_optimizer_(const Inputs& in) {
     solver->prices[count++]=(forecast_ore_+optimizer_settings_.marginal_adder)/100;
   plan_.deadline=in.now/900*900+count*900;plan_.provisional=count>published;
   double terminal=std::max(0.f,continuation_ore_+optimizer_settings_.marginal_adder)/100/p.eta_c;
+  auto policy=std::unique_ptr<compact::Policy<101>>(new(std::nothrow) compact::Policy<101>);
   optimizer_request_=solver->choose(p,count,predicted_load_w_/1000,in.soc*p.capacity/100,
-      control_.reserve_active,relay_->state?1:0,terminal,(optimizer_until_-in.now)/3600.)==1;
+      control_.reserve_active,relay_->state?1:0,terminal,(optimizer_until_-in.now)/3600.,policy.get())==1;
   optimizer_ready_=true;
   if(optimizer_request_) plan_.seconds[plan_.current]=optimizer_until_-in.now;
+  if(policy) {
+    // Forward simulation of the saved grid policy. Later actions use the nearest
+    // SOC node, so these are provisional, not a committed continuous-state path.
+    double energy=in.soc*p.capacity/100;
+    bool latch=control_.reserve_active;
+    for(int t=0;t<published;++t) {
+      int request=t==0?int(optimizer_request_):policy->action(t,latch,energy,p);
+      auto step=p;
+      if(t==0) step.dt=(optimizer_until_-in.now)/3600.;
+      auto outcome=compact::advance(energy,latch,request,predicted_load_w_/1000,step);
+      projected_mains_[plan_.current+t]=uint16_t(std::clamp(std::lround(outcome.on_hours*3600),0L,900L));
+      energy=outcome.energy;latch=outcome.latched;
+    }
+    projection_ready_=true;
+  }
   optimizer_ms_=millis()-started;
   min_heap_=std::min(min_heap_,uint32_t(heap_caps_get_free_size(MALLOC_CAP_8BIT)));
   min_block_=std::min(min_block_,uint32_t(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
@@ -373,6 +390,7 @@ void Controller::tick_() {
   if (in.clock_ok && replan && !fetching_.load()) {
     if(automatic) update_optimizer_(in);
     else {
+      projection_ready_=false;
       plan_=Plan{};plan_.at=in.now;
       optimizer_until_=in.now/900*900+900;
       for(size_t i=0;i<price_count_;++i) {
@@ -485,6 +503,7 @@ void Controller::loop() {
   if (fetch_ready_.load(std::memory_order_acquire)) {
     if (fetch_result_.count) {
       prices_ = fetch_result_.prices;
+      projection_ready_=false;
       price_count_ = fetch_result_.count;
       fx_ = fetch_result_.rate;
       fx_time_ = fetch_result_.rate_time;
@@ -807,34 +826,46 @@ void Controller::history_json_(AsyncWebServerRequest* r, bool daily) {
   end_json(r);
 }
 void Controller::schedule_json_(AsyncWebServerRequest* r) {
-  begin_json(r);
-  if (!chunk(r, "[")) return;
-  bool comma = false;
-  char b[180];
-  auto now = clock_->now().timestamp;
-  size_t count;
+  struct Snapshot {
+    std::array<Price,PRICE_COUNT> prices{};
+    std::array<uint16_t,PRICE_COUNT> projected{};
+    size_t count{0};
+    uint32_t now{0}, at{0}, horizon{0};
+    bool healthy{false}, projection{false}, always{false}, request{false};
+  };
+  auto s=std::make_unique<Snapshot>();
   {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    count = price_count_;
+    auto in=inputs_();
+    s->prices=prices_;s->count=price_count_;s->projected=projected_mains_;
+    s->now=in.now;s->at=plan_.at;s->horizon=plan_.horizon;
+    s->always=control_.mode==Mode::ALWAYS;
+    s->healthy=in.clock_ok && in.bms_fresh && in.meter_fresh && !in.fault && !ota_ && !overcurrent_;
+    s->projection=s->healthy && !plan_dirty_ &&
+        (s->always || (projection_ready_ && optimizer_ready_ && in.now<optimizer_until_));
+    s->request=s->always || control_.reserve_active ||
+        (!plan_dirty_ && optimizer_ready_ && in.now<optimizer_until_ && optimizer_request_);
   }
-  for (size_t i = 0; i < count; ++i) {
-    Price x;
-    uint16_t seconds;
-    uint32_t at;
-    {
-      std::lock_guard<std::recursive_mutex> lock(mutex_);
-      if (i >= price_count_) break;
-      x = prices_[i];
-      seconds = plan_.seconds[i];
-      at = plan_.at;
-    }
-    if (x.start + 900 <= now) continue;
-    snprintf(b, sizeof(b), "%s{\"time\":%u,\"price\":%.4f,\"start\":%u,\"seconds\":%u}", comma ? "," : "",
-             x.start, double(x.ore), std::max(at, x.start), seconds);
-    if (!chunk(r, b)) return;
-    comma = true;
+  begin_json(r);
+  if (!chunk(r, "[")) return;
+  bool comma=false;
+  char b[340];
+  for(size_t i=0;i<s->count;++i) {
+    const auto& x=s->prices[i];
+    if(x.start+900<=s->now) continue;
+    bool current=x.start<=s->now;
+    bool valid=s->projection && (s->always || x.start<s->horizon);
+    unsigned remaining=x.start+900-std::max(s->now,x.start);
+    unsigned seconds=current && s->healthy && s->request?remaining:0;
+    unsigned projected=valid?(s->always?remaining:std::min(unsigned(s->projected[i]),remaining)):0;
+    snprintf(b,sizeof(b),"%s{\"time\":%u,\"price\":%.4f,\"start\":%u,\"seconds\":%u,"
+        "\"current\":%s,\"projection_valid\":%s,\"projected_seconds\":%u,\"generated_at\":%u}",
+        comma?",":"",x.start,double(x.ore),std::max(s->now,x.start),seconds,
+        current?"true":"false",valid?"true":"false",projected,s->at);
+    if(!chunk(r,b)) return;
+    comma=true;
   }
-  chunk(r, "]");
+  chunk(r,"]");
   end_json(r);
 }
 void Controller::savings_json_(AsyncWebServerRequest* r) {

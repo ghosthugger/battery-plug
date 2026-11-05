@@ -259,3 +259,26 @@ UI/source match, all six charts, current-time marker, fresh BMS/meter data,
 `storage_ok=true`, and accumulating priced savings observations. Automatic mode,
 10%/20% reserve recovery and all existing tariff/model settings were preserved.
 Savings start with this deployment; 30 days of hardware history do not yet exist.
+
+## Addition: provisional future charging windows — 2026-11-05
+
+Supersedes the earlier current-decision-only graph. Capture the DP's grid policy
+in an optional temporary packed table and simulate forward from measured SOC,
+using the unchanged exact first action and remaining quarter duration. Carry
+physical low-battery recovery and estimate on-seconds for future published-price
+slots. Draw pale dashed green 15-minute periods, distinguish the solid current
+mains request, and show next predicted period plus approximate on-minutes in
+chart tooltips. Explain that partially used recovery slots are shaded as periods.
+
+Retain only 400 bytes of on-seconds beyond the solve; temporary policy <8 KiB.
+Keep future choices display-only; allocation failure must not affect control.
+Label nearest-grid future actions approximate, with no maximum timing-error
+promise. Hide stale/expired/faulted or invalidated forecasts; Always charging
+shows continuous future mains. Continue existing replanning on input changes
+and at quarter boundaries. Do not persist the policy or change savings storage.
+
+Validate unchanged first actions/Qs, packed-table bounds, shortened first slot,
+cheap windows, recovery, and comparison with repeated continuous-state suffix
+solves. Check desktop/mobile future/current styles and unavailable forecasts,
+run existing tests and production build, then commit/deploy. Verify live source
+match, forecast API/shading, healthy BMS/meter data, preserved settings and savings.

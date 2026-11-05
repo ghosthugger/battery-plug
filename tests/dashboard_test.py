@@ -21,7 +21,7 @@ history = [dict(time=NOW-86400+i*300, soc=50+i/10, soc_min=50+i/10, soc_max=51+i
                 unknown_kwh=0,cost_kr=.03,flags=0) for i in range(288) if i not in range(50,65)]
 days = [dict(day=20000+i, energy_kwh=2.5, unknown_kwh=.1, cost_kr=2, on_seconds=22000,
              coverage=86400,soc_min=30,soc_max=90,met=1,missed=0) for i in range(180)]
-schedule=[dict(time=NOW+i*900,price=40+i%80,start=NOW+i*900,seconds=900 if i<10 else 0) for i in range(80)]
+schedule=[dict(time=NOW+i*900,price=40+i%80,start=NOW+i*900,seconds=900 if i==0 else 0,current=i==0,projection_valid=True,projected_seconds=900 if i in range(8,16) else 0,generated_at=NOW) for i in range(80)]
 failures=[]
 from urllib.parse import parse_qs
 
@@ -32,6 +32,8 @@ def route(request):
     if endpoint=='settings':
         for k, v in parse_qs(request.request.post_data).items():state[k]=v[0] if k=='finish' else float(v[0])
         answer={'ok':True}
+    elif endpoint=='schedule':
+        answer=[dict(slot,projected_seconds=900 if state['mode']=='always' and slot['projection_valid'] else slot['projected_seconds']) for slot in schedule]
     elif endpoint=='mode':
         state['mode']=parse_qs(request.request.post_data)['mode'][0];answer={'ok':True}
     else:answer={'status':state,'history':history,'days':days,'schedule':schedule,'events':[], 'savings':{'started_at':NOW-86400, 'reference_kr':1.5, 'days':[{'day':int(NOW/86400)-1,'known_seconds':86400,'missing_seconds':0,'baseline_kr':5,'grid_kr':3,'inventory_kr':-1,'savings_kr':1}, {'day':int(NOW/86400),'known_seconds':3600,'missing_seconds':600,'baseline_kr':.5,'grid_kr':1,'inventory_kr':.2,'savings_kr':-.3}]}}.get(endpoint,{})
@@ -48,6 +50,10 @@ with sync_playwright() as p:
         page.wait_for_function("document.querySelector('#soc').textContent.includes('72.3')")
         page.wait_for_function("document.querySelector('#months').children.length>0")
         assert page.locator('svg').count()==6
+        assert page.locator('#priceChart [data-projection=true]').count()==8
+        assert 'Next projected mains period' in page.locator('#projectionInfo').inner_text()
+        assert page.locator('#priceChart [data-projection=false]').count()==1
+        assert page.locator('#priceChart [data-now-marker]').text_content()=='Now'
         assert page.locator('#savingsTotal').inner_text()=='0.70 kr'
         assert page.locator('#savingsChart rect[fill="#e58c97"]').count()==1
         assert '0.2 hours excluded' in page.locator('#savingsCoverage').inner_text()
@@ -75,7 +81,16 @@ with sync_playwright() as p:
         page.get_by_role('button',name='Always charging',exact=True).click()
         page.wait_for_function("document.querySelector('[data-mode=always]').getAttribute('aria-pressed')==='true'")
         assert 'Always on' in page.locator('#deadline').inner_text()
+        page.wait_for_function("document.querySelectorAll('#priceChart [data-projection=true]').length===79")
+        assert 'throughout' in page.locator('#projectionInfo').inner_text()
         page.screenshot(path=str(ROOT/'.esphome'/f'dashboard-{width}.png'),full_page=True)
+        for slot in schedule:slot['projection_valid']=False
+        state['mode']='auto'
+        page.evaluate('refresh()')
+        page.evaluate('refreshHistory()')
+        page.wait_for_function("document.querySelector('#projectionInfo').textContent.includes('unavailable')")
+        assert page.locator('#priceChart [data-projection=true]').count()==0
+        for slot in schedule:slot['projection_valid']=True
         page.close()
     browser.close()
 assert not failures,failures

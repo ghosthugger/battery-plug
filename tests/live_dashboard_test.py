@@ -18,6 +18,10 @@ with sync_playwright() as p:
   page.wait_for_function("document.querySelector('#soc').textContent.includes('%')",timeout=20000)
   page.wait_for_function("document.querySelectorAll('svg').length===6",timeout=20000)
   assert not page.locator('#error').inner_text()
+  assert page.get_by_role('heading',name='Prices and predicted charging').count()==1
+  assert page.locator('#projectionInfo').inner_text()
+  schedule=page.request.get(base+'/charging/api/schedule').json()
+  assert all({'current','projection_valid','projected_seconds','generated_at'}<=item.keys() for item in schedule)
   for key in ['reserve_threshold','reserve_recovery','marginal_adder','charge_efficiency','discharge_efficiency','idle_w']:
    assert float(page.locator('#'+key).input_value())==status[key],key
   assert page.locator('#target').count()==0 and page.locator('#finish').count()==0

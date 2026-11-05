@@ -218,3 +218,34 @@ losses, signed prices, missing data, restart, rollback, price boundaries, DST an
 30-day expiry. `tests/dashboard_test.py` checks counter arithmetic and signed
 bars at desktop/mobile widths alongside existing controls. The production build
 and existing controller/optimiser tests must pass before deployment.
+
+## Predicted charging windows
+
+The price chart shades the current mains request in solid green and provisional
+future mains periods in pale dashed green. It shows only the published-price
+window; the optimiser still includes its existing estimated-price extension
+when choosing. Shading denotes 15-minute periods that are expected to contain
+mains operation; recovery may enable mains for only part of a period. Tooltips
+show estimated on-minutes. The next predicted period is also written below the
+chart. All forecasts are recomputed with the normal optimiser calculation.
+
+A display-only packed policy table adds 7,575 bytes temporarily during a solve;
+only 400 bytes of per-published-slot predicted on-seconds remain afterward.
+Forward simulation uses the exact current decision and remaining current-slot
+duration, then nearest SOC-grid future choices and the physical recovery model.
+Future predictions are approximate: grid rounding and strict off-on ties can
+produce different windows from repeatedly solving at exact future SOC. There is
+no claimed one-slot timing-error bound. Changing demand/new prices can also move
+windows. Current decisions, safety stops and the cost optimisation are unchanged.
+Policy allocation failure omits predictions while retaining normal control.
+Stale/faulted telemetry, expired calculations and changed prices/settings hide
+outdated forecasts. Always charging shows continuous future mains availability.
+Forecasts are regenerated after restart; the separate savings history persists.
+
+Validation: `tests/projection_test.cpp` verifies bit bounds, 100 unchanged current
+actions and exact Q values with/without capture, a cheap-window scenario,
+partial first slots and recovery. It compares the projected path with exact
+continuous-state suffix solves (one differing action out of 36 in that scenario).
+Dashboard fixtures cover current/future styles and unavailable predictions at
+1200 px and 390 px. This scenario is a correctness check, not an accuracy claim
+for all consumption patterns.
