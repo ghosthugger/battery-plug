@@ -37,7 +37,8 @@ enum class Reason : uint8_t {
   COOLDOWN,
   LOW_BATTERY,
   PLANNER,
-  ALWAYS
+  ALWAYS,
+  BMS_HANDOFF
 };
 inline const char* reason_text(Reason r) {
   static const char* names[] = {"Off",
@@ -57,7 +58,8 @@ inline const char* reason_text(Reason r) {
                                 "Waiting for switch cooldown",
                                 "Low battery: restoring mains",
                                 "Waiting for optimiser settings or price data",
-                                "Always charging: mains enabled"};
+                                "Always charging: mains enabled",
+                                "Phone Bluetooth access: mains held on, live BMS checks paused"};
   return names[static_cast<unsigned>(r)];
 }
 struct Settings {
@@ -458,7 +460,8 @@ class Control {
   // Automatic cost control has no daily target/deadline/ceiling. All existing
   // data/fault checks and the persistent low-battery recovery remain authoritative.
   bool evaluate_optimized(const Settings& s, const Inputs& in, const Plan& p, const Price* prices,
-                          bool ready, bool request, float start, float stop) {
+                          bool ready, bool request, float start, float stop,
+                          bool diagnostic_mains_hold = false) {
     (void)s; (void)prices;
     if (mode!=Mode::AUTO && mode!=Mode::ALWAYS) mode=Mode::AUTO;
     if (start<=0 || !valid_reserve_settings(start,stop)) reserve_active=false;
@@ -467,7 +470,10 @@ class Control {
       else if (in.soc>=stop) reserve_active=false;
     }
     bool want=false,immediate=true;
-    if (mode==Mode::AUTO && !in.clock_ok && !reserve_active) reason=Reason::CLOCK;
+    // Explicit bounded phone-access exception; the component admits it only
+    // from healthy readings with mains already on. No phantom switch/cooldown.
+    if (diagnostic_mains_hold && in.meter_fresh && !in.fault) {want=true;reason=Reason::BMS_HANDOFF;}
+    else if (mode==Mode::AUTO && !in.clock_ok && !reserve_active) reason=Reason::CLOCK;
     else if (!in.bms_fresh || !std::isfinite(in.soc) || in.soc<0 || in.soc>100) reason=Reason::BMS;
     else if (!in.meter_fresh) reason=Reason::METER;
     else if (in.fault) reason=Reason::FAULT;

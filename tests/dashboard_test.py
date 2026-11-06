@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 NOW = 1793520000
 state = dict(now=NOW, mode='auto', reason='Waiting for cheaper electricity', relay=False, soc=72.3, voltage=13.2,
              current=-3.1, power=0, price=75, temp_min=18, temp_max=20, cell_min=3.29,
+             charge_allowed=True, bluetooth_connected=True, bluetooth_handoff='idle', bluetooth_remaining=0,
              cell_max=3.31, alarms='0000000000000000', bms_fresh=True, bms_age=1,
              meter_fresh=True, clock_ok=True, target=90, ceiling=100, finish='07:00',
              capacity_kwh=4, charger_w=400, efficiency=.85, deadline=NOW+72000,
@@ -36,6 +37,11 @@ def route(request):
         answer={'capacity':32,'retained_ram_bytes':1944,'storage_ok':True,'snapshots':[dict(sequence=i+1,time=NOW-i*10,clock_ok=True,uptime_ms=10000,trigger='permission_changed',charge_allowed=bool(i%2),charge_mos=i%2,discharge_mos=1,alarms='0001000200030010',soc=100,voltage=14.4,current=20,cell_min=3.5,cell_max=3.65,temp_min=25,temp_max=26,meter_w=400,relay=True) for i in range(32)]}
     elif endpoint=='schedule':
         answer=[dict(slot,projected_seconds=900 if state['mode']=='always' and slot['projection_valid'] else slot['projected_seconds']) for slot in schedule]
+    elif endpoint=='bluetooth':
+        action=parse_qs(request.request.post_data)['action'][0]
+        state.update(bluetooth_handoff='paused' if action=='disconnect' else 'reconnecting',
+                     bluetooth_remaining=300 if action=='disconnect' else 45)
+        answer={'ok':True}
     elif endpoint=='mode':
         state['mode']=parse_qs(request.request.post_data)['mode'][0];answer={'ok':True}
     else:answer={'status':state,'history':history,'days':days,'schedule':schedule,'events':[], 'savings':{'started_at':NOW-86400, 'reference_kr':1.5, 'days':[{'day':int(NOW/86400)-1,'known_seconds':86400,'missing_seconds':0,'baseline_kr':5,'grid_kr':3,'inventory_kr':-1,'savings_kr':1}, {'day':int(NOW/86400),'known_seconds':3600,'missing_seconds':600,'baseline_kr':.5,'grid_kr':1,'inventory_kr':.2,'savings_kr':-.3}]}}.get(endpoint,{})
@@ -88,6 +94,21 @@ with sync_playwright() as p:
         page.wait_for_function("document.querySelector('[data-mode=always]').getAttribute('aria-pressed')==='true'")
         assert 'Always on' in page.locator('#deadline').inner_text()
         page.wait_for_function("document.querySelectorAll('#priceChart [data-projection=true]').length===79")
+        state.update(relay=True, bluetooth_handoff='idle', bms_fresh=True)
+        page.evaluate('refresh()')
+        page.wait_for_function("!document.querySelector('#btDisconnect').disabled")
+        page.locator('#btDisconnect').click()
+        page.wait_for_function("document.querySelector('#bluetoothInfo').textContent.includes('Phone access active')")
+        assert page.locator('#btDisconnect').is_disabled()
+        assert not page.locator('#btReconnect').is_disabled()
+        assert state['relay'] is True and state['mode']=='always'
+        state['bms_fresh']=False
+        page.evaluate('refresh()')
+        page.locator('#btReconnect').click()
+        page.wait_for_function("document.querySelector('#bluetoothInfo').textContent.includes('Reconnecting')")
+        state.update(bluetooth_handoff='idle', bms_fresh=True, relay=False)
+        page.evaluate('refresh()')
+        page.wait_for_function("document.querySelector('#btDisconnect').disabled")
         assert 'throughout' in page.locator('#projectionInfo').inner_text()
         page.screenshot(path=str(ROOT/'.esphome'/f'dashboard-{width}.png'),full_page=True)
         for slot in schedule:slot['projection_valid']=False

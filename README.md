@@ -15,6 +15,32 @@ The agreed plan, including the description of the original state, is saved in
 
 ## Charging controls
 
+### Phone access to the BMS
+
+Under **Phone Bluetooth access** on `/charging`, **Disconnect BMS for 5 minutes**
+releases the Bluetooth connection without unplugging mains. Start with mains
+already enabled, a connected BMS and fresh fault-free battery/meter readings;
+select Always charging first if needed. Then connect the Daly phone app.
+Close/disconnect the phone app before pressing **Reconnect BMS**.
+
+This is an explicit temporary diagnostic exception to stale-BMS shutdown:
+mains remains on, including charging, while live BMS fault monitoring is
+unavailable. Cached readings are marked stale immediately, and battery-derived
+savings/load learning are suspended. The BMS's own protection is unchanged;
+no MOS commands or BMS configuration writes are sent. Meter, overcurrent and
+OTA stops remain authoritative. A known BMS inhibit prevents entry or ends the
+window. New BMS faults cannot be observed while disconnected.
+
+Automatic reconnection starts after five minutes, followed by at most 45 seconds
+to receive a new BMS reading. Normal control then resumes; unsuccessful
+reconnection invokes existing stale-BMS shutdown. Repeated requests cannot extend
+either timer. The window is not persisted across restart and does not change the
+selected charging mode. API: POST `/charging/api/bluetooth` with form `action`
+equal to `disconnect` or `reconnect`; status exposes `bluetooth_connected`,
+`bluetooth_handoff` and `bluetooth_remaining` (seconds).
+
+### Operating modes
+
 Choose **Automatic** for cost optimisation or **Always charging** to keep mains
 continuously enabled. Both modes persist across restart and neither expires.
 There is no Off mode, Charge now, manual target or manual finish time.

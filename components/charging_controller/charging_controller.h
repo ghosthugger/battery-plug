@@ -9,6 +9,7 @@
 #include "savings.h"
 #include "bms_diagnostics.h"
 #include "daly_settings.h"
+#include "bms_handoff.h"
 #include "esphome/components/ble_client/ble_client.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/switch/switch.h"
@@ -73,6 +74,7 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
   charging::DalySettingsFrames daly_settings_frames_{};
   std::atomic<bool> settings_read_active_{false}, settings_read_ready_{false};
   bool daly_settings_valid_{false};
+  charging::BmsHandoff bms_handoff_{};
   uint8_t settings_read_attempts_{0};
   uint32_t settings_read_ms_{0}, settings_read_at_{0};
   bool savings_continuous_{false};

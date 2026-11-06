@@ -346,7 +346,7 @@ Inputs Controller::inputs_() const {
   in.now = t.timestamp;
   in.clock_ok = t.is_valid();
   uint32_t ms = millis();
-  in.bms_fresh = last_bms_ms_ && ms - last_bms_ms_ < 60000;
+  in.bms_fresh = !bms_handoff_.active() && last_bms_ms_ && ms - last_bms_ms_ < 60000;
   in.meter_fresh = last_power_ms_ && ms - last_power_ms_ < 30000 && std::isfinite(meter_w_) &&
                    meter_w_ >= 0 && meter_w_ <= 4000;
   in.soc = battery_.soc;
@@ -429,7 +429,8 @@ void Controller::tick_() {
   }
   bool was_reserve = control_.reserve_active;
   bool desired = control_.evaluate_optimized(settings_, in, plan_, prices_.data(),
-      optimizer_ready_ && in.now<optimizer_until_+30,optimizer_request_,reserve_threshold_,reserve_recovery_);
+      optimizer_ready_ && in.now<optimizer_until_+30,optimizer_request_,reserve_threshold_,reserve_recovery_,
+      bms_handoff_.active());
   if (was_reserve != control_.reserve_active) {
     storage_ok_ &= save_record(nvs_, "reserve_active", control_.reserve_active);
     if (nvs_) storage_ok_ &= nvs_commit(nvs_) == ESP_OK;
@@ -495,14 +496,14 @@ void Controller::loop() {
       gross_charge_w_ = 0.9f * gross_charge_w_ + 0.1f * observed;
     }
     uint32_t now=clock_->now().timestamp;
-    if(clock_->now().is_valid()) {
+    if(clock_->now().is_valid() && !bms_handoff_.active()) {
       if(!relay_->state && !ota_ && std::isfinite(net))
         optimizer_history_.observe_load(now,std::max(0.f,(-net-optimizer_settings_.idle_w)*
             optimizer_settings_.discharge_efficiency),observation_ms_?(ms-observation_ms_)/1000.f:0);
       if(observation_hour_ && observation_hour_!=now/3600) persist_optimizer_();
       observation_hour_=now/3600;
     }
-    observation_ms_=ms;
+    observation_ms_=bms_handoff_.active()?0:ms;
     backoff_ms_ = 5000;
   }
   if(settings_read_ready_.load(std::memory_order_acquire)) {
@@ -515,17 +516,29 @@ void Controller::loop() {
   }
   if(settings_read_active_.load() && ms-settings_read_ms_>=1500)
     settings_read_active_.store(false);
-  if (connected_ && ms - poll_ms_ >= 10000) {
+  bool was_paused=bms_handoff_.paused();
+  bool was_handoff=bms_handoff_.active();
+  auto handoff_inputs=inputs_();
+  bms_handoff_.update(ms,received_battery,handoff_inputs.fault || !handoff_inputs.meter_fresh);
+  if (was_paused && !bms_handoff_.paused() && !ota_) {
+    parent_->set_enabled(true);
+    reconnect_ms_=ms;
+  }
+  if (was_handoff && !bms_handoff_.active()) {
+    observation_ms_=0;  // Do not learn a load from a gap in battery observations.
+    plan_dirty_=true;
+  }
+  if (!bms_handoff_.paused() && connected_ && ms - poll_ms_ >= 10000) {
     settings_read_active_.store(false); // Routine status polling always wins.
     poll_ms_ = ms;
     poll_bms_();
   }
-  if (!ota_ && (!last_bms_ms_ || ms - last_bms_ms_ > 45000) && ms - reconnect_ms_ > backoff_ms_) {
+  if (!ota_ && !bms_handoff_.active() && (!last_bms_ms_ || ms - last_bms_ms_ > 45000) && ms - reconnect_ms_ > backoff_ms_) {
     reconnect_ms_ = ms;
     parent_->set_enabled(false);
     connected_ = false;
     set_timeout("reconnect", 1000, [this] {
-      if (!ota_) parent_->set_enabled(true);
+      if (!ota_ && !bms_handoff_.paused()) parent_->set_enabled(true);
     });
     backoff_ms_ = std::min<uint32_t>(60000U, backoff_ms_ * 2);
   }
@@ -567,7 +580,7 @@ void Controller::loop() {
   // Query once after a complete status reply; leave at least five seconds before the
   // next scheduled status poll. Unsupported reads time out in 1.5 seconds,
   // retry at most three times, and never affect charge permission or settings.
-  if(received_battery && connected_ && !ota_ && !daly_settings_valid_ &&
+  if(received_battery && connected_ && !bms_handoff_.paused() && !ota_ && !daly_settings_valid_ &&
       !settings_read_active_.load() && settings_read_attempts_<3 &&
       (!settings_read_attempts_ || ms-settings_read_ms_>=30000) && ms-poll_ms_<5000) {
     uint8_t request[]={0xd2,3,0,0x80,0,0x29,0,0};
@@ -771,6 +784,39 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
     r->send(200, "application/json", "{\"ok\":true}");
     return;
   }
+  if (r->method() == HTTP_POST && u == "/charging/api/bluetooth") {
+    auto action=r->arg("action");
+    if (action!="disconnect" && action!="reconnect") {
+      r->send(400,"application/json","{\"error\":\"Use disconnect or reconnect\"}");return;
+    }
+    bool disconnect=action=="disconnect";
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      auto in=inputs_();
+      if (disconnect && (bms_handoff_.active() || !relay_->state || !in.bms_fresh ||
+          !in.meter_fresh || in.fault || !connected_)) {
+        r->send(409,"application/json","{\"error\":\"Requires mains on, connected BMS and fresh fault-free battery/meter readings\"}");return;
+      }
+    }
+    defer([this,disconnect] {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      auto in=inputs_();
+      if (disconnect) {
+        if (!bms_handoff_.start(millis(),in.bms_fresh && in.meter_fresh && !in.fault && connected_,relay_->state)) return;
+        cancel_timeout("reconnect");
+        observation_ms_=0;
+        savings_continuous_=false;
+        settings_read_active_.store(false);
+        parent_->set_enabled(false);
+      } else {
+        bms_handoff_.reconnect(millis());
+        if (!ota_) parent_->set_enabled(true);
+        reconnect_ms_=millis();
+      }
+      tick_();
+    });
+    r->send(200,"application/json","{\"ok\":true}");return;
+  }
   if (r->method() == HTTP_POST && u == "/charging/api/mode") {
     auto mode = r->arg("mode");
     int value = mode == "auto" ? 1 : mode == "always" ? 3 : -1;
@@ -804,7 +850,8 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            "\"forecast_price\":%.3f,\"continuation_price\":%.3f,\"predicted_load_w\":%.2f,"
            "\"marginal_adder\":%.2f,\"charge_efficiency\":%.3f,\"discharge_efficiency\":%.3f,"
            "\"idle_w\":%.2f,\"fallback_load_w\":%.2f,\"optimizer_ms\":%u,\"optimizer_bytes\":%u,"
-           "\"charge_mos\":%u,\"discharge_mos\":%u,\"charge_allowed\":%s,\"balancing_status\":%u}",
+           "\"charge_mos\":%u,\"discharge_mos\":%u,\"charge_allowed\":%s,\"balancing_status\":%u,"
+           "\"bluetooth_connected\":%s,\"bluetooth_handoff\":\"%s\",\"bluetooth_remaining\":%u}",
            in.now,
            control_.mode == Mode::ALWAYS ? "always" : "auto",
            reason_text(control_.reason), relay_->state ? "true" : "false",
@@ -829,7 +876,9 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            double(optimizer_settings_.discharge_efficiency),double(optimizer_settings_.idle_w),
            double(optimizer_settings_.fallback_load_w),optimizer_ms_,unsigned(sizeof(compact::Solver<101>)),
            unsigned(battery_.charge_mos),unsigned(battery_.discharge_mos),battery_.charge_allowed?"true":"false",
-           unsigned(battery_.balancing_status));
+           unsigned(battery_.balancing_status),connected_?"true":"false",
+           bms_handoff_.paused()?"paused":bms_handoff_.active()?"reconnecting":"idle",
+           bms_handoff_.remaining_seconds(millis()));
   lock.unlock();  // Never let a slow HTTP client block relay supervision.
   r->send(200, "application/json", b);
 }

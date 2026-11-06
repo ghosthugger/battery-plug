@@ -394,3 +394,23 @@ Expose cached JSON plus raw41 words, not writable settings. Do not read an
 unconfirmed balancer-enable register or claim to know protection release/delay.
 Nativeparser tests, control regressions, build and live settings/freshness checks
 must pass. Preserve mode, savings and captured inhibit snapshots on deployment.
+
+## Temporary phone Bluetooth access — 2026-11-06
+
+Add Disconnect BMS for 5 minutes and Reconnect BMS controls to `/charging`.
+Require mains already on, a connected BMS and fresh fault-free battery/meter
+readings before entry. Disable automatic BLE retry while the phone-access timer
+is active. Keep mains on for this explicitly requested diagnostic window despite
+stale BMS telemetry; mark cached battery readings stale immediately rather than
+inventing freshness. Pause battery-derived savings and load learning. Physical
+BMS protection remains active, but new BMS faults cannot be monitored by the
+plug during disconnection. Known BMS inhibits, stale meter, overcurrent and OTA
+remain stops; no MOS commands or BMS settings writes are added.
+
+Reconnect on request or automatically after five minutes. Allow at most
+45 seconds for the first new status reply, then resume existing control and
+stale-BMS shutdown if unsuccessful. Neither timer can be extended by repeated
+requests. Use monotonic wrap-safe timers, under 16 bytes of retained RAM and no
+new flash records; restart clears the window. Preserve charging mode, settings,
+savings and diagnostics. Verify timer expiry, reconnection, fault precedence,
+desktop/mobile controls, firmware build and installed API/UI.
