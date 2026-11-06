@@ -161,7 +161,16 @@ soak is not considered complete merely because short acceptance tests pass.
   passed with ASan/UBSan; desktop/mobile dashboard fixtures passed.
 - ESPHome 2026.10.1 compilation passed: application 1,603,328 of 1,835,008 bytes
   (231,680 bytes headroom), static RAM 162,214 bytes. No new history allocation.
-- Deployment and live persistence verification remain pending: this session
-  cannot connect to 192.168.1.254 even outside the sandbox, although the user can
-  open the plug in their browser. The built OTA image is retained locally at
-  `.esphome/build/athom-smart-plug-v3/build/firmware.ota.bin`.
+- Deployed source `cb9258f` through macOS Terminal using the web `/update`
+  endpoint; response `Update Successful!`. Direct session networking and the
+  Python native OTA client could not reach the plug; Terminal curl succeeded.
+  OTA image 1,603,696 bytes, SHA256
+  `c87d2ca05b1ffe32fa55fe2f72cf807f2a53c29d1d06fd2304a256961692807f`.
+- At uptime 26 seconds, Automatic resumed with fresh BMS/meter, connected BLE,
+  valid prices, ready optimiser, healthy storage, SOC 95.4% and zero BMS alarms.
+  Existing 10–20% reserve, capacity and optimiser settings survived. New status
+  fields report `full_charge_resume:95` and `full_charge_paused:false`.
+  Free heap 76,092 bytes; largest block 51,200 bytes; minimum heap 62,408 bytes.
+- Full-to-95% live operation and latch persistence across a later restart remain
+  unobserved; native tests cover controller behavior with a restored latch.
+  Local deployment logs/status evidence are under `.esphome/full-pause-*`.
