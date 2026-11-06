@@ -414,3 +414,19 @@ requests. Use monotonic wrap-safe timers, under 16 bytes of retained RAM and no
 new flash records; restart clears the window. Preserve charging mode, settings,
 savings and diagnostics. Verify timer expiry, reconnection, fault precedence,
 desktop/mobile controls, firmware build and installed API/UI.
+
+Implemented in `d0c9980` and deployed successfully. OTA SHA256:
+`ca1bb89df85d3754f7602724d8a2fc8314b93470d21ce7b78b63f65365bddaec`.
+Firmware uses162206 bytes static RAM and1602796 bytes application flash;
+handoff state adds8 bytes. All seven native test suites, four supervisor tests,
+desktop/mobile fixture tests and independent review passed. Native integration
+tests verify stale-data hold, fault/meter precedence, timer wrap/expiry and return
+to Automatic without phantom relay transitions or an artificial cooldown.
+
+Live installed desktop/mobile page and API checks passed, including rejection of
+disconnect while mains is off and invalid-action rejection. Mode, operating
+settings, savings and existing diagnostic snapshots survived OTA, and normal
+10-second BMS telemetry continued. At verification, Automatic had mains off and
+SOC96.6%; no new charging cycle or live handoff was initiated. The actual phone
+connection and five-minute physical handoff remain to be exercised by the user.
+Logs and captured verification JSON are under `.esphome/bt-handoff-*`.
