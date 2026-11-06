@@ -343,3 +343,26 @@ and restoring Automatic after the first captured inhibit or at its two-hour
 limit. Logs/results are under `.esphome/charge-inhibit-test-2026-11-06/`.
 The inhibit has not yet been reproduced at this checkpoint; do not treat the
 running test as a confirmed diagnosis or a completed full-charge soak.
+
+### Charging observation outcome — 2026-11-06
+
+The supervisor reproduced and captured the inhibit at 12:07:33 Stockholm after
+about 74 minutes, then confirmed Automatic restored at 12:07:36. At 12:07:28,
+SOC was 99.1%, charging current 24.2 A, cells 3.437–3.598 V, alarms zero and
+charge MOS on. The transition snapshot (sequence 3) reports SOC 100%, charge
+MOS off, discharge MOS on, zero battery current and alarm `0002000000000000`
+(register 0x3A = 0x0002). The upstream D2 decoder maps this bit to critical cell
+voltage too high. The sampled cell range at the inhibit was 3.420–3.566 V;
+measurements taken every ten seconds do not establish the peak or configured
+trip threshold. Cell voltage divergence suggests checking top-of-charge balance
+and configured voltage thresholds, not treating the flag as benign full SOC.
+
+Sequence 4, ten seconds later, records alarms cleared and charge MOS re-enabled
+while the battery supplies the load. Follow-up read-only verification confirmed
+Automatic, mains off, charge allowed and both snapshots retained; flash storage
+healthy. Test results and pre-trip minute samples are saved in
+`.esphome/charge-inhibit-test-2026-11-06/`. No safety masking, MOS command,
+threshold change or further forced charging was performed.
+
+Alarm mapping reference:
+https://github.com/syssi/esphome-daly-bms/blob/main/components/daly_bms_ble/daly_bms_ble.cpp
