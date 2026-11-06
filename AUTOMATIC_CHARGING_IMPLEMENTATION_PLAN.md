@@ -430,3 +430,20 @@ settings, savings and existing diagnostic snapshots survived OTA, and normal
 SOC96.6%; no new charging cycle or live handoff was initiated. The actual phone
 connection and five-minute physical handoff remain to be exercised by the user.
 Logs and captured verification JSON are under `.esphome/bt-handoff-*`.
+
+## Full-charge pause until 95%
+
+Automatic mode disconnects mains at 100% SOC, or on the captured Daly
+cell-overvoltage charging cutoff (register 0x3A bit 1) above 95% SOC. It then
+keeps mains off until a fresh valid BMS reading reaches 95% or lower, regardless
+of cheap electricity or subsequent clearing of the BMS cutoff. At 95% the
+normal price optimiser resumes; charging is not forced. Other BMS faults are
+not treated as full charge. Existing fault stops retain priority.
+
+The pause latch is saved in NVS only when it changes and restored after restart.
+It uses one boolean plus a small NVS record, with no new history buffers.
+Low-battery recovery and bounded phone Bluetooth handoff retain priority.
+Always charging continues to override economic pauses; returning to Automatic
+respects the retained latch. The dashboard reason explains the pause, and status
+JSON exposes `full_charge_paused` and `full_charge_resume` (95). This reduces
+repeated top charging; it does not correct cell imbalance or charger settings.

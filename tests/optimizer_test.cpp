@@ -44,6 +44,53 @@ int main() {
  in.bms_fresh=true;in.meter_fresh=false;assert(!c.evaluate_optimized(s,in,p,&price,false,false,10,20));
  in.meter_fresh=true;in.soc=100;
  assert(c.evaluate_optimized(s,in,p,&price,false,false,10,20));
+ // Full-charge pause survives repeated requests, invalid observations and mode
+ // changes. Releasing it permits the price algorithm; it does not force charge.
+ Control top;top.set_mode(Mode::AUTO,in.now,s);
+ in.clock_ok=in.bms_fresh=in.meter_fresh=true;in.fault=false;p.current=0;
+ in.soc=99.9;
+ assert(top.evaluate_optimized(s,in,p,&price,true,true,10,20));
+ in.soc=100;
+ assert(!top.evaluate_optimized(s,in,p,&price,true,true,10,20));
+ assert(top.full_charge_paused&&top.reason==Reason::FULL_PAUSE);
+ in.soc=99;in.now+=900;
+ assert(!top.evaluate_optimized(s,in,p,&price,true,true,10,20));
+ in.soc=95.1;
+ assert(!top.evaluate_optimized(s,in,p,&price,true,true,10,20));
+ in.soc=94;in.bms_fresh=false;
+ assert(!top.evaluate_optimized(s,in,p,&price,true,true,10,20)&&top.full_charge_paused);
+ in.bms_fresh=true;in.soc=NAN;
+ assert(!top.evaluate_optimized(s,in,p,&price,true,true,10,20)&&top.full_charge_paused);
+ in.soc=95;
+ assert(!top.evaluate_optimized(s,in,p,&price,true,false,10,20));
+ assert(!top.full_charge_paused&&top.reason==Reason::WAITING);
+ in.now+=121;
+ assert(top.evaluate_optimized(s,in,p,&price,true,true,10,20));
+ // Confirmed full-charge cutoff latches even below 100%; faults still win.
+ in.soc=98;in.full_charge_cutoff=true;in.fault=true;
+ assert(!top.evaluate_optimized(s,in,p,&price,true,true,10,20));
+ assert(top.full_charge_paused&&top.reason==Reason::FAULT);
+ in.full_charge_cutoff=false;in.fault=false;in.now+=121;
+ assert(!top.evaluate_optimized(s,in,p,&price,true,true,10,20));
+ assert(top.reason==Reason::FULL_PAUSE);
+ Control restored;restored.full_charge_paused=top.full_charge_paused;
+ restored.set_mode(Mode::AUTO,in.now,s);
+ assert(!restored.evaluate_optimized(s,in,p,&price,true,true,10,20));
+ restored.set_mode(Mode::ALWAYS,in.now,s);
+ assert(restored.evaluate_optimized(s,in,p,&price,true,true,10,20));
+ restored.set_mode(Mode::AUTO,in.now,s);
+ assert(!restored.evaluate_optimized(s,in,p,&price,true,true,10,20));
+ // An unrelated inhibition must not latch a near-full pack.
+ top=Control{};top.set_mode(Mode::AUTO,in.now,s);in.fault=true;
+ assert(!top.evaluate_optimized(s,in,p,&price,true,true,10,20));
+ assert(!top.full_charge_paused);
+ // Low-battery recovery takes priority even with high configured thresholds.
+ top.full_charge_paused=true;top.reserve_active=true;in.fault=false;in.soc=96;in.now+=121;
+ assert(top.evaluate_optimized(s,in,p,&price,false,false,95,99));
+ assert(top.reason==Reason::LOW_BATTERY);
+ in.soc=5;
+ assert(top.evaluate_optimized(s,in,p,&price,false,false,10,20));
+ assert(!top.full_charge_paused&&top.reserve_active);
  OptimizerHistory history;OptimizerSettings settings;
  assert(valid_optimizer_settings(settings));settings.idle_w=NAN;assert(!valid_optimizer_settings(settings));
  uint32_t hour=in.now/3600*3600;

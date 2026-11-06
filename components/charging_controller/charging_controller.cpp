@@ -114,6 +114,7 @@ void Controller::restore_() {
   if (load_record(nvs_, "reserve_end", recovery) && valid_reserve_settings(reserve_threshold_, recovery))
     reserve_recovery_ = recovery;
   load_record(nvs_, "reserve_active", control_.reserve_active);
+  load_record(nvs_, "full_pause", control_.full_charge_paused);
   uint32_t overcurrent=0;
   if(load_record(nvs_, "overcurrent", overcurrent)) overcurrent_=overcurrent!=0;
   OptimizerSettings optimizer;
@@ -350,6 +351,10 @@ Inputs Controller::inputs_() const {
   in.meter_fresh = last_power_ms_ && ms - last_power_ms_ < 30000 && std::isfinite(meter_w_) &&
                    meter_w_ >= 0 && meter_w_ <= 4000;
   in.soc = battery_.soc;
+  // Captured Daly 0x3A bit1: cell-overvoltage protection. Do not interpret
+  // arbitrary charge-MOS inhibition (temperature, manual off, etc.) as full.
+  in.full_charge_cutoff = !battery_.charge_allowed &&
+      (uint16_t(battery_.alarms >> 48) & 0x0002) != 0;
   in.fault = !battery_.charge_allowed || overcurrent_ || ota_;
   in.load_w = load_w_;
   in.effective_charge_w = std::max(0.0f, gross_charge_w_ - load_w_);
@@ -428,10 +433,15 @@ void Controller::tick_() {
       }
   }
   bool was_reserve = control_.reserve_active;
+  bool was_full_pause = control_.full_charge_paused;
   bool desired = control_.evaluate_optimized(settings_, in, plan_, prices_.data(),
       optimizer_ready_ && in.now<optimizer_until_+30,optimizer_request_,reserve_threshold_,reserve_recovery_,
       bms_handoff_.active());
-  if (was_reserve != control_.reserve_active) {
+  if (was_full_pause != control_.full_charge_paused) {
+    storage_ok_ &= save_record(nvs_, "full_pause", control_.full_charge_paused);
+    plan_dirty_ = true; // Recompute the economic choice on latch changes.
+  }
+  if (was_reserve != control_.reserve_active || was_full_pause != control_.full_charge_paused) {
     storage_ok_ &= save_record(nvs_, "reserve_active", control_.reserve_active);
     if (nvs_) storage_ok_ &= nvs_commit(nvs_) == ESP_OK;
   }
@@ -846,7 +856,7 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            "\"fetching\":%s,\"price_error\":\"%s\",\"storage_ok\":%s,\"free_heap\":%u,\"largest_block\":%u,"
            "\"min_heap\":%u,\"min_block\":%u,\"uptime\":%u,\"history_days\":%u,"
            "\"reserve_threshold\":%.1f,\"reserve_recovery\":%.1f,\"reserve_active\":%s,"
-           "\"algorithm\":\"compact-mpc-v2\",\"optimizer_ready\":%s,\"decision_until\":%u,"
+           "\"full_charge_paused\":%s,\"full_charge_resume\":95,\"algorithm\":\"compact-mpc-v2\",\"optimizer_ready\":%s,\"decision_until\":%u,"
            "\"forecast_price\":%.3f,\"continuation_price\":%.3f,\"predicted_load_w\":%.2f,"
            "\"marginal_adder\":%.2f,\"charge_efficiency\":%.3f,\"discharge_efficiency\":%.3f,"
            "\"idle_w\":%.2f,\"fallback_load_w\":%.2f,\"optimizer_ms\":%u,\"optimizer_bytes\":%u,"
@@ -869,6 +879,7 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)), min_heap_, min_block_,
            millis() / 1000, unsigned(RETAINED_DAYS), double(reserve_threshold_),
            double(reserve_recovery_), control_.reserve_active ? "true" : "false",
+           control_.full_charge_paused?"true":"false",
            optimizer_ready_?"true":"false",optimizer_until_,
            double(std::isfinite(forecast_ore_)?forecast_ore_:0),
            double(std::isfinite(continuation_ore_)?continuation_ore_:0),double(predicted_load_w_),

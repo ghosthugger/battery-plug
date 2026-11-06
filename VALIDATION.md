@@ -147,3 +147,21 @@ soak is not considered complete merely because short acceptance tests pass.
   evidence is `tests/backtest/nonexpiring-modes-deployment.json`. Verification used
   the case-sensitive native Restart route after a harmless 404 from the initial
   lower-case test route. No 24-hour soak is claimed.
+
+## Full-charge pause — 2026-11-06
+
+- Automatic now pauses mains after 100% SOC or the captured Daly cell-overvoltage
+  cutoff above 95%, until fresh valid SOC reaches 95%. Cheap prices cannot clear
+  the latch. Always charging, low-battery recovery, phone handoff and existing
+  fault stops retain their established priority. No BMS commands/settings added.
+- Latch changes are persisted in NVS; restore loads the same latch. Native tests
+  cover repeated economic requests, exact release boundary, invalid/stale SOC,
+  early full-charge cutoff, fault priority, restored latch, mode changes,
+  unrelated inhibition and reserve priority. All eight native test executables
+  passed with ASan/UBSan; desktop/mobile dashboard fixtures passed.
+- ESPHome 2026.10.1 compilation passed: application 1,603,328 of 1,835,008 bytes
+  (231,680 bytes headroom), static RAM 162,214 bytes. No new history allocation.
+- Deployment and live persistence verification remain pending: this session
+  cannot connect to 192.168.1.254 even outside the sandbox, although the user can
+  open the plug in their browser. The built OTA image is retained locally at
+  `.esphome/build/athom-smart-plug-v3/build/firmware.ota.bin`.

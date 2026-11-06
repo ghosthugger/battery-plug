@@ -38,7 +38,8 @@ enum class Reason : uint8_t {
   LOW_BATTERY,
   PLANNER,
   ALWAYS,
-  BMS_HANDOFF
+  BMS_HANDOFF,
+  FULL_PAUSE
 };
 inline const char* reason_text(Reason r) {
   static const char* names[] = {"Off",
@@ -59,7 +60,8 @@ inline const char* reason_text(Reason r) {
                                 "Low battery: restoring mains",
                                 "Waiting for optimiser settings or price data",
                                 "Always charging: mains enabled",
-                                "Phone Bluetooth access: mains held on, live BMS checks paused"};
+                                "Phone Bluetooth access: mains held on, live BMS checks paused",
+                                "Full battery: waiting until 95% before charging"};
   return names[static_cast<unsigned>(r)];
 }
 struct Settings {
@@ -324,7 +326,7 @@ class DalyFrames {
 };
 struct Inputs {
   uint32_t now{0};
-  bool clock_ok{false}, bms_fresh{false}, meter_fresh{false}, fault{false};
+  bool clock_ok{false}, bms_fresh{false}, meter_fresh{false}, fault{false}, full_charge_cutoff{false};
   float soc{UNKNOWN}, load_w{0}, effective_charge_w{0};
 };
 struct Plan {
@@ -385,7 +387,7 @@ class Control {
  public:
   Mode mode{Mode::OFF};
   Reason reason{Reason::OFF};
-  bool on{false}, target_latched{false}, reserve_active{false};
+  bool on{false}, target_latched{false}, reserve_active{false}, full_charge_paused{false};
   uint32_t last_switch{0}, manual_deadline{0}, cycle_deadline{0};
   bool cycle_met{false};
   void set_mode(Mode value, uint32_t now, const Settings& s) {
@@ -469,6 +471,12 @@ class Control {
       if (in.soc<=start) reserve_active=true;
       else if (in.soc>=stop) reserve_active=false;
     }
+    // Only fresh valid SOC can change the persisted full-charge latch. The
+    // captured Daly cell-overvoltage cutoff may precede a 100% SOC report.
+    if (in.bms_fresh && std::isfinite(in.soc) && in.soc>=0 && in.soc<=100) {
+      if (in.soc<=95) full_charge_paused=false;
+      else if (in.soc>=100 || in.full_charge_cutoff) full_charge_paused=true;
+    }
     bool want=false,immediate=true;
     // Explicit bounded phone-access exception; the component admits it only
     // from healthy readings with mains already on. No phantom switch/cooldown.
@@ -479,6 +487,7 @@ class Control {
     else if (in.fault) reason=Reason::FAULT;
     else if (mode==Mode::ALWAYS) {want=true;reason=Reason::ALWAYS;}
     else if (reserve_active) {want=true;reason=Reason::LOW_BATTERY;}
+    else if (full_charge_paused) reason=Reason::FULL_PAUSE;
     else if (p.current<0) reason=Reason::PRICE_UNKNOWN;
     else if (!ready) reason=Reason::PLANNER;
     else {want=request;reason=want?Reason::CHARGING:Reason::WAITING;immediate=false;}
