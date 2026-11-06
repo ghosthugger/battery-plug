@@ -366,3 +366,31 @@ threshold change or further forced charging was performed.
 
 Alarm mapping reference:
 https://github.com/syssi/esphome-daly-bms/blob/main/components/daly_bms_ble/daly_bms_ble.cpp
+
+## Investigation follow-up: charger regulation and read-only BMS settings — 2026-11-06
+
+The matching EDECOA DPP15-series manufacturer manual, pages6/8, explicitly lists
+LiFePO4 compatibility and a CC/CV/float profile, with14.4 V charging and13.6 V
+float for12 V models. This corrects the unconfirmed lead-acid-only hypothesis;
+exact inverter label/revision is still requested because the current product
+page and older manual differ in charging-current specification. The manual
+describes only an internal charging-voltage potentiometer with manufacturer
+service guidance, not an external profile/current adjustment or charger-disable
+API. Do not open or alter the inverter as part of software diagnosis.
+
+The captured trace shows cell spread increasing from about5 mV to161 mV while
+current remains near24 A, before pack voltage reaches the documented CV stage.
+This supports top-of-charge imbalance as a leading hypothesis, without proving
+peak voltage, the configured protection threshold, a damaged cell or sensor
+accuracy. General DALY30 mA passive-balancing specifications are not yet verified
+for this exact board. Correct imbalance/settings before considering a hardware
+replacement or any full-SOC mains hold across an inhibit.
+
+Add a bounded, serialized read-only D2 settings query through the existing BLE
+connection to inspect actual protection/balancing values. Keep the normal status
+parser/freshness/control untouched; separate87-byte parser,1.5-second timeout,
+at most3 attempts30 seconds apart, and status polling always takes priority.
+Expose cached JSON plus raw41 words, not writable settings. Do not read an
+unconfirmed balancer-enable register or claim to know protection release/delay.
+Nativeparser tests, control regressions, build and live settings/freshness checks
+must pass. Preserve mode, savings and captured inhibit snapshots on deployment.

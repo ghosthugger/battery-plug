@@ -198,11 +198,13 @@ static void daly() {
   set(103, 1);
   set(67, 65);
   set(109, 1);
+  set(107, 1);
   set(111, 1);
   crc();
   Battery out;
   assert(decode_daly(b.data(), b.size(), out) && out.charge_allowed);
   assert(out.charge_mos==1 && out.discharge_mos==1);
+  assert(out.balancing_status==1);
   assert(out.soc == 50 && std::abs(out.current - 1) < .001 && out.temp_min == 25);
   DalyFrames frames;
   for (size_t i = 0; i < b.size(); ++i) {

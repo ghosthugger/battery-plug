@@ -253,6 +253,7 @@ struct Battery {
   uint64_t alarms{0};
   uint16_t charge_mos{0}, discharge_mos{0}; // Raw D2 registers 0x35 / 0x36.
   bool charge_allowed{false};
+  uint16_t balancing_status{0}; // Live active/inactive readback, not the enable setting.
 };
 inline bool decode_daly(const uint8_t* b, size_t n, Battery& out) {
   if (n != 129 || b[0] != 0xd2 || b[1] != 3 || b[2] != 124 ||
@@ -285,6 +286,7 @@ inline bool decode_daly(const uint8_t* b, size_t n, Battery& out) {
   }
   for (int i = 0; i < 8; ++i) v.alarms = (v.alarms << 8) | b[119 + i];
   v.charge_mos=u16(109);v.discharge_mos=u16(111);
+  v.balancing_status=u16(107);
   // Registers 0x3A..0x3D: high voltage, charge temperature/current,
   // cell/temperature imbalance and acquisition/MOS faults prohibit a start.
   // Undervoltage and low-SOC flags must not prevent recovery charging.

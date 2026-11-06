@@ -309,12 +309,21 @@ void Controller::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t, 
     poll_ms_ = millis() - 10000;
   } else if (event == ESP_GATTC_DISCONNECT_EVT) {
     connected_ = false;
+    settings_read_active_.store(false);
     frames_.reset();
     notify_handle_ = write_handle_ = 0;
     node_state = esp32_ble_tracker::ClientState::IDLE;
   } else if (event == ESP_GATTC_NOTIFY_EVT && p->notify.handle == notify_handle_) {
     const auto* b = p->notify.value;
     size_t n = p->notify.value_len;
+    if(settings_read_active_.load(std::memory_order_acquire)) {
+      DalySettings decoded;
+      if(daly_settings_frames_.push(b,n,decoded) && !settings_read_ready_.load()) {
+        pending_daly_settings_=decoded;
+        settings_read_ready_.store(true,std::memory_order_release);
+      }
+      return;
+    }
     Battery decoded;
     if (frames_.push(b, n, decoded) && !battery_ready_.load()) {
       pending_battery_ = decoded;
@@ -462,11 +471,13 @@ void Controller::loop() {
   uint32_t ms = millis();
   BmsSnapshot diagnostic;
   bool save_diagnostic=false;
+  bool received_battery=false;
   if (battery_ready_.load(std::memory_order_acquire)) {
     float old = battery_.soc;
     battery_ = pending_battery_;
     battery_ready_.store(false);
     last_bms_ms_ = ms;
+    received_battery=true;
     auto diagnostic_clock=clock_->now();
     save_diagnostic=bms_diagnostics_.observe(battery_,diagnostic_clock.timestamp,
         diagnostic_clock.is_valid(),ms,relay_->state,meter_w_,diagnostic);
@@ -494,7 +505,18 @@ void Controller::loop() {
     observation_ms_=ms;
     backoff_ms_ = 5000;
   }
+  if(settings_read_ready_.load(std::memory_order_acquire)) {
+    daly_settings_=pending_daly_settings_;
+    settings_read_ready_.store(false);
+    settings_read_active_.store(false);
+    daly_settings_valid_=true;
+    settings_read_at_=clock_->now().is_valid()?clock_->now().timestamp:0;
+    // A settings response never refreshes last_bms_ms_ or battery freshness.
+  }
+  if(settings_read_active_.load() && ms-settings_read_ms_>=1500)
+    settings_read_active_.store(false);
   if (connected_ && ms - poll_ms_ >= 10000) {
+    settings_read_active_.store(false); // Routine status polling always wins.
     poll_ms_ = ms;
     poll_bms_();
   }
@@ -541,6 +563,20 @@ void Controller::loop() {
     char key[16];snprintf(key,sizeof(key),"bms_diag%02u",unsigned(diagnostic.sequence%BmsDiagnostics::COUNT));
     storage_ok_ &= save_record(nvs_,key,diagnostic);
     if(nvs_) storage_ok_ &= nvs_commit(nvs_)==ESP_OK;
+  }
+  // Query once after a complete status reply; leave at least five seconds before the
+  // next scheduled status poll. Unsupported reads time out in 1.5 seconds,
+  // retry at most three times, and never affect charge permission or settings.
+  if(received_battery && connected_ && !ota_ && !daly_settings_valid_ &&
+      !settings_read_active_.load() && settings_read_attempts_<3 &&
+      (!settings_read_attempts_ || ms-settings_read_ms_>=30000) && ms-poll_ms_<5000) {
+    uint8_t request[]={0xd2,3,0,0x80,0,0x29,0,0};
+    auto crc=crc16(request,6);request[6]=crc;request[7]=crc>>8;
+    daly_settings_frames_.reset();settings_read_ms_=ms;++settings_read_attempts_;
+    settings_read_active_.store(true,std::memory_order_release);
+    if(esp_ble_gattc_write_char(parent_->get_gattc_if(),parent_->get_conn_id(),write_handle_,
+        sizeof(request),request,ESP_GATT_WRITE_TYPE_NO_RSP,ESP_GATT_AUTH_REQ_NONE)!=ESP_OK)
+      settings_read_active_.store(false);
   }
   uint32_t interval =
       fetch_failures_ ? std::min(900000U, 30000U << std::min(fetch_failures_ - 1, 5U)) : 900000U;
@@ -677,6 +713,10 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
       bms_diagnostics_json_(r);
       return;
     }
+    if (u == "/charging/api/bms-settings") {
+      bms_settings_json_(r);
+      return;
+    }
   }
   if (r->method() == HTTP_POST && u == "/charging/api/settings") {
     Settings s;
@@ -764,7 +804,7 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            "\"forecast_price\":%.3f,\"continuation_price\":%.3f,\"predicted_load_w\":%.2f,"
            "\"marginal_adder\":%.2f,\"charge_efficiency\":%.3f,\"discharge_efficiency\":%.3f,"
            "\"idle_w\":%.2f,\"fallback_load_w\":%.2f,\"optimizer_ms\":%u,\"optimizer_bytes\":%u,"
-           "\"charge_mos\":%u,\"discharge_mos\":%u,\"charge_allowed\":%s}",
+           "\"charge_mos\":%u,\"discharge_mos\":%u,\"charge_allowed\":%s,\"balancing_status\":%u}",
            in.now,
            control_.mode == Mode::ALWAYS ? "always" : "auto",
            reason_text(control_.reason), relay_->state ? "true" : "false",
@@ -788,7 +828,8 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            double(optimizer_settings_.marginal_adder),double(optimizer_settings_.charge_efficiency),
            double(optimizer_settings_.discharge_efficiency),double(optimizer_settings_.idle_w),
            double(optimizer_settings_.fallback_load_w),optimizer_ms_,unsigned(sizeof(compact::Solver<101>)),
-           unsigned(battery_.charge_mos),unsigned(battery_.discharge_mos),battery_.charge_allowed?"true":"false");
+           unsigned(battery_.charge_mos),unsigned(battery_.discharge_mos),battery_.charge_allowed?"true":"false",
+           unsigned(battery_.balancing_status));
   lock.unlock();  // Never let a slow HTTP client block relay supervision.
   r->send(200, "application/json", b);
 }
@@ -925,6 +966,31 @@ void Controller::savings_json_(AsyncWebServerRequest* r) {
   }
   chunk(r, "]}");
   end_json(r);
+}
+void Controller::bms_settings_json_(AsyncWebServerRequest* r) {
+  std::unique_lock<std::recursive_mutex> lock(mutex_);
+  auto buffer=std::make_unique<std::array<char,1800>>();
+  auto* b=buffer->data();
+  if(!daly_settings_valid_) {
+    snprintf(b,buffer->size(),"{\"read_ok\":false,\"attempts\":%u,\"pending\":%s,"
+        "\"error\":\"%s\"}",unsigned(settings_read_attempts_),settings_read_active_.load()?"true":"false",
+        settings_read_attempts_>=3?"No supported settings response after three attempts":"Waiting for settings read");
+  } else {
+    const auto& s=daly_settings_;
+    char raw[256];size_t used=0;
+    for(unsigned i=0;i<s.registers.size();++i)
+      used+=snprintf(raw+used,sizeof(raw)-used,"%s%u",i?",":"",unsigned(s.registers[i]));
+    snprintf(b,buffer->size(),"{\"read_ok\":true,\"read_at\":%u,\"attempts\":%u,"
+        "\"capacity_ah\":%.1f,\"reference_cell_mv\":%u,\"cell_count\":%u,\"chemistry_raw\":%u,"
+        "\"cell_ov_warning_mv\":%u,\"cell_ov_protection_mv\":%u,\"pack_ov_warning_v\":%.1f,"
+        "\"pack_ov_protection_v\":%.1f,\"balance_start_mv\":%u,\"balance_delta_mv\":%u,"
+        "\"balancing_active_raw\":%u,\"register_start\":128,\"registers\":[%s]}",
+        settings_read_at_,unsigned(settings_read_attempts_),s.get(0x80)*.1,unsigned(s.get(0x81)),
+        unsigned(s.get(0x83)),unsigned(s.get(0x89)),unsigned(s.get(0x8b)),unsigned(s.get(0x8c)),
+        s.get(0x8f)*.1,s.get(0x90)*.1,unsigned(s.get(0xa3)),unsigned(s.get(0xa4)),
+        unsigned(battery_.balancing_status),raw);
+  }
+  lock.unlock();r->send(200,"application/json",b);
 }
 void Controller::bms_diagnostics_json_(AsyncWebServerRequest* r) {
   auto snapshot=std::make_unique<BmsDiagnostics>();

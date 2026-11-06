@@ -298,3 +298,31 @@ restoration. `tests/observe_charge_inhibit_test.py` checks inhibit/timeout/error
 restoration and the read-only default without accessing hardware. Existing
 controller/optimiser/savings/projection tests and desktop/mobile checks remain
 required, followed by an actual baseline/restart persistence check on the plug.
+
+## Read-only BMS configuration inspection
+
+`GET /charging/api/bms-settings` returns the cached D2 configuration block
+`0x0080..0x00A8`, including configured capacity/chemistry, cell and pack voltage
+protection values, and balancing start voltage/delta. Raw words are retained
+alongside the interpreted fields. This is an inspection endpoint, not a settings
+editor; none of these values replaces the controller's protection logic.
+
+After a complete normal status response, the plug sends only a Modbus **read**
+(function 0x03), start0x0080 count41. The 87-byte settings reply has an isolated
+length/CRC parser. Unsupported reads time out in 1.5 seconds, at most three
+attempts spaced at least30 seconds. Normal ten-second status polling takes
+priority. Settings replies never mark battery telemetry fresh. The query adds
+under300 bytes of settings/parser buffers plus small state and makes no BMS or
+NVS settings writes. Configuration is read again on plug startup, so restart
+when inspecting BMS settings changed separately in the phone app.
+
+`balancing_status` in live status is the raw *currently active* readback; zero
+does not prove balancing is disabled. Balancer enable register0xCF, release
+voltage and protection delay are not exposed because their mapping is not
+confirmed for this firmware. Read success confirms framing/CRC, not that the
+settings are appropriate for the cells. Normal protective stops remain intact.
+
+Mapping provenance: upstream `syssi/esphome-daly-bms` settings decoder and
+`docs/dalyModbusProtocol.xlsx`. Native `tests/daly_settings_test.cpp` verifies
+fragmentation/CRC, exact mapping, rejection of normal status and exception
+frames, reset recovery and the read-only request CRC.

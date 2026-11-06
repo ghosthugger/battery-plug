@@ -8,6 +8,7 @@
 #include "optimizer_history.h"
 #include "savings.h"
 #include "bms_diagnostics.h"
+#include "daly_settings.h"
 #include "esphome/components/ble_client/ble_client.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/switch/switch.h"
@@ -68,6 +69,12 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
   charging::OptimizerHistory optimizer_history_{};
   charging::Savings savings_{};
   charging::BmsDiagnostics bms_diagnostics_{};
+  charging::DalySettings daly_settings_{}, pending_daly_settings_{};
+  charging::DalySettingsFrames daly_settings_frames_{};
+  std::atomic<bool> settings_read_active_{false}, settings_read_ready_{false};
+  bool daly_settings_valid_{false};
+  uint8_t settings_read_attempts_{0};
+  uint32_t settings_read_ms_{0}, settings_read_at_{0};
   bool savings_continuous_{false};
   uint32_t savings_saved_ms_{0}, output_changed_ms_{0};
   bool optimizer_ready_{false}, optimizer_request_{false};
@@ -128,5 +135,6 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
   void events_json_(AsyncWebServerRequest*);
   void savings_json_(AsyncWebServerRequest*);
   void bms_diagnostics_json_(AsyncWebServerRequest*);
+  void bms_settings_json_(AsyncWebServerRequest*);
 };
 }  // namespace esphome::charging_controller
