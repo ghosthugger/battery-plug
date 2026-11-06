@@ -18,6 +18,11 @@ with sync_playwright() as p:
   page.wait_for_function("document.querySelector('#soc').textContent.includes('%')",timeout=20000)
   page.wait_for_function("document.querySelectorAll('svg').length===6",timeout=20000)
   assert not page.locator('#error').inner_text()
+  diag=page.request.get(base+'/charging/api/bms-diagnostics').json()
+  assert diag['capacity']==32 and diag['retained_ram_bytes']<=2048
+  assert 1<=len(diag['snapshots'])<=32
+  assert page.locator('#bmsSnapshots tr').count()>=1
+  assert 'retained snapshots' in page.locator('#bmsDiagnosticInfo').inner_text()
   assert page.get_by_role('heading',name='Prices and predicted charging').count()==1
   assert page.locator('#projectionInfo').inner_text()
   schedule=page.request.get(base+'/charging/api/schedule').json()

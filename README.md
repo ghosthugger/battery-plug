@@ -249,3 +249,52 @@ continuous-state suffix solves (one differing action out of 36 in that scenario)
 Dashboard fixtures cover current/future styles and unavailable predictions at
 1200 px and 390 px. This scenario is a correctness check, not an accuracy claim
 for all consumption patterns.
+
+## Persistent BMS charging diagnostics
+
+The dashboard's BMS charging diagnostics table retains the latest 32 snapshots:
+first valid reading after startup, each change of charge permission, and changes
+in raw MOS/alarm details while charging is prohibited. Snapshots preserve the
+unfiltered four alarm words, raw charge/discharge MOS registers, SOC, pack
+voltage/current, cell/temperature min/max, plug power and relay state before
+control responds. This distinguishes a switch readback from an alarm condition;
+it does not assume that a charging inhibit means battery full.
+
+Snapshots are 60 bytes; the entire ring and tracking state use 1,944 bytes of
+retained RAM. Each changed slot is individually versioned/checksummed and
+committed immediately after control evaluation. Unchanged 10-second samples do
+not cause flash writes. A fixed 32-slot ring overwrites the oldest entry and
+survives restart/OTA independently of savings/history. A baseline is recorded
+after every startup; time is null/unavailable until the clock is valid, with
+uptime retained instead. Events shorter than the BMS polling interval can be
+missed. A power cut during a flash commit can lose that latest snapshot.
+
+Read-only JSON: `/charging/api/bms-diagnostics`; `/charging/api/status` also
+exposes live `charge_mos`, `discharge_mos` and `charge_allowed`. Existing safety
+logic and BMS read-only operation are preserved; a diagnostic transition forces
+the existing control evaluation before its new flash write. There is no alarm
+masking, MOS switching command, or change to the optimiser.
+
+For a deliberate normal charging observation from a computer with LAN access:
+
+```sh
+python tools/observe_charge_inhibit.py --always-charging --minutes 120 \
+  --output-dir .esphome/charge-inhibit-test
+```
+
+Without `--always-charging`, this tool is read-only. With it, the tool enables
+Always charging, observes new diagnostic snapshots and returns to Automatic on
+an inhibit, timeout, unhealthy telemetry/storage, interruption or a detected
+external mode change. Returning to Automatic resumes normal price/recovery
+control; it is not an unconditional charger-off command. Existing protective
+stops remain authoritative. No BMS settings/registers are written. Keep the
+supervising computer awake and connected; power/network loss can prevent mode
+restoration, in which case select Automatic on the dashboard. It writes
+`latest.json`, minute samples and a final `result.json` in the output directory.
+
+Validation: native `tests/bms_diagnostics_test.cpp` covers exact raw data, CRC
+layout/corruption, change-only capture, overwrite and out-of-order restart
+restoration. `tests/observe_charge_inhibit_test.py` checks inhibit/timeout/error
+restoration and the read-only default without accessing hardware. Existing
+controller/optimiser/savings/projection tests and desktop/mobile checks remain
+required, followed by an actual baseline/restart persistence check on the plug.

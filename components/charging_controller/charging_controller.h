@@ -7,6 +7,7 @@
 #include "compact_optimizer.h"
 #include "optimizer_history.h"
 #include "savings.h"
+#include "bms_diagnostics.h"
 #include "esphome/components/ble_client/ble_client.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/switch/switch.h"
@@ -66,6 +67,7 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
   charging::OptimizerSettings optimizer_settings_{};
   charging::OptimizerHistory optimizer_history_{};
   charging::Savings savings_{};
+  charging::BmsDiagnostics bms_diagnostics_{};
   bool savings_continuous_{false};
   uint32_t savings_saved_ms_{0}, output_changed_ms_{0};
   bool optimizer_ready_{false}, optimizer_request_{false};
@@ -125,5 +127,6 @@ class Controller : public Component, public ble_client::BLEClientNode, public As
   void schedule_json_(AsyncWebServerRequest*);
   void events_json_(AsyncWebServerRequest*);
   void savings_json_(AsyncWebServerRequest*);
+  void bms_diagnostics_json_(AsyncWebServerRequest*);
 };
 }  // namespace esphome::charging_controller

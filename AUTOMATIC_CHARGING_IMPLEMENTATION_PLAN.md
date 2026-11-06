@@ -292,3 +292,34 @@ BMS/meter data, healthy storage, preserved Automatic mode and 10%/20% reserve
 settings, unchanged tariff/model settings and preserved savings start/reference
 and history. At verification, the next provisional mains period was 5 November
 21:15 Stockholm; this is a changing prediction, not a promised switch time.
+
+## Addition: bounded persistent BMS snapshots — 2026-11-06
+
+The overnight event ring shows repeated BMS-inhibit shutdowns following a
+90.8% to 100% SOC jump, not ordinary optimiser off decisions. Existing events
+lack the switch/alarm/voltage details needed to identify the underlying cause.
+The user confirmed a morning power cycle, so current heap minima do not cover
+the overnight run. Do not infer that 100% means harmless charge termination.
+
+Add a fixed 32-slot diagnostic ring under 2 KiB retained RAM. Capture a baseline
+after startup, permission transitions, and changed raw MOS/alarm details during
+an inhibit. Store timestamp/uptime, charge permission and both raw MOS readbacks,
+all alarm bits, SOC/pack current/voltage, cell/temperature extremes and pre-response
+plug state/power. Keep unknown/reserved bits, mark unavailable clock/readings,
+commit each changed slot with version/checksum after existing control checks,
+and restore independently of savings/history. Never write BMS settings/MOS
+commands, mask alarms, or introduce full-SOC overrides. Expose read-only JSON
+and a desktop/mobile dashboard table. Newest snapshots replace the oldest.
+
+Verify CRC/layout/bounds, unchanged-sample write suppression, overwrite and
+restart restoration; run regression tests and full build. Commit/deploy and
+verify the installed baseline persists through a real restart. Preserve existing
+mode/settings and savings data. No historical backfill is possible.
+
+The user additionally authorized selecting Always charging to attempt a normal
+full-charge reproduction after logging is installed. Use a computer-side
+supervisor with a two-hour maximum, save observed snapshots and restore
+Automatic on the first inhibit or test exit. Keep the computer awake and LAN
+connected; existing plug/BMS protections remain active. Record whether a real
+inhibit was observed rather than claiming the condition was reproduced merely
+because Always charging was selected.

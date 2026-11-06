@@ -32,6 +32,8 @@ def route(request):
     if endpoint=='settings':
         for k, v in parse_qs(request.request.post_data).items():state[k]=v[0] if k=='finish' else float(v[0])
         answer={'ok':True}
+    elif endpoint=='bms-diagnostics':
+        answer={'capacity':32,'retained_ram_bytes':1944,'storage_ok':True,'snapshots':[dict(sequence=i+1,time=NOW-i*10,clock_ok=True,uptime_ms=10000,trigger='permission_changed',charge_allowed=bool(i%2),charge_mos=i%2,discharge_mos=1,alarms='0001000200030010',soc=100,voltage=14.4,current=20,cell_min=3.5,cell_max=3.65,temp_min=25,temp_max=26,meter_w=400,relay=True) for i in range(32)]}
     elif endpoint=='schedule':
         answer=[dict(slot,projected_seconds=900 if state['mode']=='always' and slot['projection_valid'] else slot['projected_seconds']) for slot in schedule]
     elif endpoint=='mode':
@@ -50,6 +52,10 @@ with sync_playwright() as p:
         page.wait_for_function("document.querySelector('#soc').textContent.includes('72.3')")
         page.wait_for_function("document.querySelector('#months').children.length>0")
         assert page.locator('svg').count()==6
+        assert page.locator('#bmsSnapshots tr').count()==32
+        assert '0x0001000200030010' in page.locator('#bmsSnapshots').inner_text()
+        assert 'Charging prohibited' in page.locator('#bmsSnapshots').inner_text()
+        assert '32/32 retained snapshots' in page.locator('#bmsDiagnosticInfo').inner_text()
         assert page.locator('#priceChart [data-projection=true]').count()==8
         assert 'Next projected mains period' in page.locator('#projectionInfo').inner_text()
         assert page.locator('#priceChart [data-projection=false]').count()==1

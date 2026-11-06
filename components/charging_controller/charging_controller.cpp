@@ -121,6 +121,12 @@ void Controller::restore_() {
     optimizer_settings_ = optimizer;
   load_record(nvs_, "optimizer_hist", optimizer_history_);
   load_record(nvs_, "savings_v1", savings_);
+  for(unsigned i=0;i<BmsDiagnostics::COUNT;++i) {
+    char key[16];snprintf(key,sizeof(key),"bms_diag%02u",i);
+    BmsSnapshot snapshot;
+    if(load_record(nvs_,key,snapshot) && snapshot.sequence%BmsDiagnostics::COUNT==i)
+      bms_diagnostics_.restore(snapshot);
+  }
   if(!valid_operating_reserve(reserve_threshold_,reserve_recovery_)) {
     reserve_threshold_=5;reserve_recovery_=10;control_.reserve_active=false;
   }
@@ -454,11 +460,16 @@ void Controller::loop() {
   if (!ready_) return;
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   uint32_t ms = millis();
+  BmsSnapshot diagnostic;
+  bool save_diagnostic=false;
   if (battery_ready_.load(std::memory_order_acquire)) {
     float old = battery_.soc;
     battery_ = pending_battery_;
     battery_ready_.store(false);
     last_bms_ms_ = ms;
+    auto diagnostic_clock=clock_->now();
+    save_diagnostic=bms_diagnostics_.observe(battery_,diagnostic_clock.timestamp,
+        diagnostic_clock.is_valid(),ms,relay_->state,meter_w_,diagnostic);
     if (!had_bms_) {
       had_bms_ = true;
       plan_dirty_ = true;
@@ -518,9 +529,18 @@ void Controller::loop() {
     fetch_ready_.store(false);
     fetching_.store(false);
   }
-  if (ms - tick_ms_ >= 1000) {
+  // A new diagnostic may represent an inhibit arriving between regular ticks:
+  // run the existing control checks now, before persisting that snapshot.
+  if (save_diagnostic || ms - tick_ms_ >= 1000) {
     tick_ms_ = ms;
     tick_();
+  }
+  // Supervise the relay before flash I/O. Persist only the changed slot, not
+  // the full ring, and commit immediately rather than waiting five minutes.
+  if(save_diagnostic) {
+    char key[16];snprintf(key,sizeof(key),"bms_diag%02u",unsigned(diagnostic.sequence%BmsDiagnostics::COUNT));
+    storage_ok_ &= save_record(nvs_,key,diagnostic);
+    if(nvs_) storage_ok_ &= nvs_commit(nvs_)==ESP_OK;
   }
   uint32_t interval =
       fetch_failures_ ? std::min(900000U, 30000U << std::min(fetch_failures_ - 1, 5U)) : 900000U;
@@ -653,6 +673,10 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
       savings_json_(r);
       return;
     }
+    if (u == "/charging/api/bms-diagnostics") {
+      bms_diagnostics_json_(r);
+      return;
+    }
   }
   if (r->method() == HTTP_POST && u == "/charging/api/settings") {
     Settings s;
@@ -739,7 +763,8 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            "\"algorithm\":\"compact-mpc-v2\",\"optimizer_ready\":%s,\"decision_until\":%u,"
            "\"forecast_price\":%.3f,\"continuation_price\":%.3f,\"predicted_load_w\":%.2f,"
            "\"marginal_adder\":%.2f,\"charge_efficiency\":%.3f,\"discharge_efficiency\":%.3f,"
-           "\"idle_w\":%.2f,\"fallback_load_w\":%.2f,\"optimizer_ms\":%u,\"optimizer_bytes\":%u}",
+           "\"idle_w\":%.2f,\"fallback_load_w\":%.2f,\"optimizer_ms\":%u,\"optimizer_bytes\":%u,"
+           "\"charge_mos\":%u,\"discharge_mos\":%u,\"charge_allowed\":%s}",
            in.now,
            control_.mode == Mode::ALWAYS ? "always" : "auto",
            reason_text(control_.reason), relay_->state ? "true" : "false",
@@ -762,7 +787,8 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            double(std::isfinite(continuation_ore_)?continuation_ore_:0),double(predicted_load_w_),
            double(optimizer_settings_.marginal_adder),double(optimizer_settings_.charge_efficiency),
            double(optimizer_settings_.discharge_efficiency),double(optimizer_settings_.idle_w),
-           double(optimizer_settings_.fallback_load_w),optimizer_ms_,unsigned(sizeof(compact::Solver<101>)));
+           double(optimizer_settings_.fallback_load_w),optimizer_ms_,unsigned(sizeof(compact::Solver<101>)),
+           unsigned(battery_.charge_mos),unsigned(battery_.discharge_mos),battery_.charge_allowed?"true":"false");
   lock.unlock();  // Never let a slow HTTP client block relay supervision.
   r->send(200, "application/json", b);
 }
@@ -899,6 +925,39 @@ void Controller::savings_json_(AsyncWebServerRequest* r) {
   }
   chunk(r, "]}");
   end_json(r);
+}
+void Controller::bms_diagnostics_json_(AsyncWebServerRequest* r) {
+  auto snapshot=std::make_unique<BmsDiagnostics>();
+  bool storage;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    *snapshot=bms_diagnostics_;storage=storage_ok_;
+  }
+  begin_json(r);
+  char b[800], values[8][24];
+  snprintf(b,sizeof(b),"{\"capacity\":32,\"snapshot_bytes\":60,\"retained_ram_bytes\":%u,"
+      "\"storage_ok\":%s,\"poll_seconds\":10,\"snapshots\":[",unsigned(sizeof(BmsDiagnostics)),storage?"true":"false");
+  if(!chunk(r,b)) return;
+  bool comma=false;
+  for(unsigned age=BmsDiagnostics::COUNT;age>0;--age) {
+    uint32_t seq=snapshot->next_sequence-age;
+    const auto& x=snapshot->records[seq%BmsDiagnostics::COUNT];
+    if(!seq || x.sequence!=seq) continue;
+    snprintf(b,sizeof(b),"%s{\"sequence\":%u,\"time\":%u,\"uptime_ms\":%u,\"clock_ok\":%s,"
+        "\"trigger\":\"%s\",\"charge_allowed\":%s,\"charge_mos\":%u,\"discharge_mos\":%u,"
+        "\"alarms\":\"%04x%04x%04x%04x\",\"soc\":%s,\"voltage\":%s,\"current\":%s,"
+        "\"cell_min\":%s,\"cell_max\":%s,\"temp_min\":%s,\"temp_max\":%s,\"meter_w\":%s,\"relay\":%s}",
+        comma?",":"",x.sequence,x.time,x.uptime_ms,x.clock_ok?"true":"false",
+        x.trigger==0?"baseline":x.trigger==1?"permission_changed":"inhibit_details_changed",
+        x.charge_allowed?"true":"false",unsigned(x.charge_mos),unsigned(x.discharge_mos),
+        unsigned(x.alarms[0]),unsigned(x.alarms[1]),unsigned(x.alarms[2]),unsigned(x.alarms[3]),
+        num(x.soc,values[0],24),num(x.voltage,values[1],24),num(x.current,values[2],24),
+        num(x.cell_min,values[3],24),num(x.cell_max,values[4],24),num(x.temp_min,values[5],24),
+        num(x.temp_max,values[6],24),num(x.meter_w,values[7],24),x.relay?"true":"false");
+    if(!chunk(r,b)) return;
+    comma=true;
+  }
+  chunk(r,"]}");end_json(r);
 }
 void Controller::events_json_(AsyncWebServerRequest* r) {
   begin_json(r);
