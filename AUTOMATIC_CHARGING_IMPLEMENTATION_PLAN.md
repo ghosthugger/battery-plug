@@ -323,3 +323,23 @@ Automatic on the first inhibit or test exit. Keep the computer awake and LAN
 connected; existing plug/BMS protections remain active. Record whether a real
 inhibit was observed rather than claiming the condition was reproduced merely
 because Always charging was selected.
+
+Deployment verified 2026-11-06: native decoder/controller/optimiser/savings/
+projection/diagnostic tests, four supervisor restoration tests, desktop/mobile
+fixtures and full ESPHome build passed. Image SHA-256
+`5e0211bfa5af187acb3897ff910ccf6931f3744fe7fab5b22b391b436943f14d`
+(1,599,024 bytes) installed. A real restart restored the exact pre-restart
+snapshot and added a new baseline. Read-only live checks confirmed storage
+healthy, 1,944 bytes retained diagnostic RAM, both MOS values and alarms exposed,
+and desktop/mobile table functionality. Existing settings and savings metadata
+were preserved before the separately authorized test.
+
+The user-authorized supervised Always charging test started at approximately
+10:53 Stockholm with SOC 88.5%. Confirmed live mode Always,
+mains enabled, charge allowed, about 24.4 A into the battery and
+537 W plug input including appliances. The existing protections remain
+active. A computer-side supervisor runs under caffeinate, stopping observation
+and restoring Automatic after the first captured inhibit or at its two-hour
+limit. Logs/results are under `.esphome/charge-inhibit-test-2026-11-06/`.
+The inhibit has not yet been reproduced at this checkpoint; do not treat the
+running test as a confirmed diagnosis or a completed full-charge soak.
