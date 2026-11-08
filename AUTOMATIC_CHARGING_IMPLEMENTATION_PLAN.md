@@ -447,3 +447,31 @@ Always charging continues to override economic pauses; returning to Automatic
 respects the retained latch. The dashboard reason explains the pause, and status
 JSON exposes `full_charge_paused` and `full_charge_resume` (95). This reduces
 repeated top charging; it does not correct cell imbalance or charger settings.
+
+## Optimiser model matches the full-charge pause — 2026-11-08
+
+`compact-mpc-v3` removes the assumption that Automatic can keep mains connected
+at full charge. Its physical model stops mains exactly at full, draws battery
+power until 95%, and only then allows another economic mains request. The solver
+and dashboard projection both carry the actual saved full-charge pause plus
+the independent low-battery recovery latch into future intervals. Recovery keeps
+priority, including overlapping configured thresholds. Always charging retains
+its separate manual behavior; no BMS writes were added. Early BMS overvoltage
+cutoffs remain measured safety events, not predicted cell-voltage behavior.
+
+The 101 energy nodes put 20 intervals in the 95–100% band and include the 95%
+boundary exactly. Temporary solver memory is 14,144 bytes and the optional
+projection table is 15,150 bytes (together 29,294 bytes, released after a solve).
+No additional persistent history or flash writes were added. HTTP fetching and
+solving remain serialized. This corrects economic decisions; it does not prohibit
+all future top-ups when their modeled total cost is lower.
+
+Historical comparison and live-snapshot decision evidence are saved in
+`tests/backtest/full-pause-model-results.json`, with independent verification in
+`tests/backtest/full-pause-model-verification.json`. Reproduce the comparison:
+
+```sh
+uv tool run --with numpy --with pandas python tools/backtest_optimizer.py --case compact_101 --model mismatch --output .esphome/full-pause-model-backtest/mismatch
+uv tool run --with numpy --with pandas python tools/backtest_optimizer.py --case compact_101 --case compact_1001 --case compact_101_float64 --case compact_101_high_load --case compact_101_idle20W --case compact_101_late_publication --model full-pause --output .esphome/full-pause-model-backtest/corrected
+uv tool run --with numpy --with pandas python tests/backtest/verify_optimizer.py --artifacts .esphome/full-pause-model-backtest/corrected
+```

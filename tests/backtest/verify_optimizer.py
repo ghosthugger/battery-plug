@@ -38,61 +38,58 @@ class Config:
     eta_d: float = 0.9
     idle: float = 0.01
     dt: float = 0.25
+    full_pause: int = 1
 
     def wire(self):
         return ' '.join(str(x) for x in self.__dict__.values())
 
 
-def reference(energy, latch, requested, load, p):
-    """Independent continuous reference: dispatch one segment to next event.
-
-    Energy integrals are signed DC changes; AC appliance supply is partitioned
-    by elapsed source time. Unlike core, no fixed event-count truncation.
-    """
+def reference(energy, latch, requested, load, p, paused=False):
+    """Independent event-based reference with explicit full/release events."""
     out = dict(energy=energy, grid=0., charged=0., battery_load=0., mains_load=0.,
                idle=0., throughput=0., on_hours=0.)
-    remaining = p.dt
-    sources = []
-    events = 0
-    while remaining > 1e-12:
-        events += 1
-        assert events < 10000, 'reference failed to make progress'
-        if energy <= p.reserve + 1e-12:
-            latch = True
-        elif energy >= p.recovery - 1e-12:
-            latch = False
-        on = bool(requested or latch)
+    remaining=p.dt
+    sources=[]
+    events=0
+    while remaining>1e-12:
+        events+=1
+        assert events<10000
+        if energy<=p.reserve+1e-12: latch=True
+        if energy>=p.recovery-1e-12: latch=False
+        if not p.full_pause or energy<=.95*p.capacity+1e-12: paused=False
+        elif energy>=p.capacity-1e-12: paused=True
+        on=bool(latch or (requested and not paused))
         sources.append(on)
+        duration=remaining
         if on:
-            rate = p.charge * p.eta_c
-            seconds = remaining
-            if latch and rate > 0:
-                seconds = min(seconds, (p.recovery-energy)/rate)
-            delta = min(rate*seconds, p.capacity-energy)
-            energy += delta
-            out['charged'] += delta/p.eta_c
-            out['mains_load'] += load*seconds
-            out['on_hours'] += seconds
-            out['throughput'] += delta
-            if energy >= p.recovery-1e-12:
-                latch = False
+            rate=p.eta_c*p.charge
+            if latch: duration=min(duration,(p.recovery-energy)/rate)
+            if p.full_pause: duration=min(duration,(p.capacity-energy)/rate)
+            delta=min(rate*duration,p.capacity-energy)
+            energy+=delta
+            out['charged']+=delta/p.eta_c
+            out['mains_load']+=load*duration
+            out['on_hours']+=duration
+            out['throughput']+=delta
+            if energy>=p.recovery-1e-12: latch=False
+            if p.full_pause and energy>=p.capacity-1e-12: paused=True
         else:
-            rate = load/p.eta_d+p.idle
-            seconds = min(remaining, (energy-p.reserve)/rate) if rate > 0 else remaining
-            delta = rate*seconds
-            energy -= delta
-            out['battery_load'] += load*seconds
-            out['idle'] += p.idle*seconds
-            out['throughput'] += delta
-            if energy <= p.reserve+1e-12:
-                energy = p.reserve
-                latch = True
-        assert seconds > 0, 'zero-duration event'
-        remaining -= seconds
-    out['energy'] = energy
-    out['grid'] = out['mains_load']+out['charged']
-    out.update(latched=int(latch), first_on=int(sources[0]), last_on=int(sources[-1]),
-               internal_transfers=sum(a != b for a,b in zip(sources,sources[1:])))
+            rate=load/p.eta_d+p.idle
+            if rate>0:
+                duration=min(duration,(energy-p.reserve)/rate)
+                if paused: duration=min(duration,(energy-.95*p.capacity)/rate)
+            energy-=rate*duration
+            out['battery_load']+=load*duration
+            out['idle']+=p.idle*duration
+            out['throughput']+=rate*duration
+            if energy<=p.reserve+1e-12: energy=p.reserve;latch=True
+            if energy<=.95*p.capacity+1e-12: paused=False
+        assert duration>0
+        remaining-=duration
+    out['energy']=energy
+    out['grid']=out['mains_load']+out['charged']
+    out.update(latched=int(latch),full_paused=int(paused),first_on=int(sources[0]),last_on=int(sources[-1]),
+               internal_transfers=sum(a!=b for a,b in zip(sources,sources[1:])))
     return out
 
 
@@ -107,13 +104,16 @@ def small_step(energy, latch, requested, load, p, tick_seconds):
              idle=0., throughput=0., on_hours=0.)
     tick=tick_seconds/3600
     elapsed=0.
+    paused=False
     while elapsed < total-1e-14:
         duration=min(tick,total-elapsed)
         if energy <= p.reserve+1e-12:
             latch=True
         elif energy >= p.recovery-1e-12:
             latch=False
-        if requested or latch:
+        if not p.full_pause or energy<=.95*p.capacity+1e-12: paused=False
+        elif energy>=p.capacity-1e-12: paused=True
+        if (requested and not paused) or latch:
             charge=min(p.charge*duration,max(0.,p.capacity-energy)/p.eta_c)
             energy+=p.eta_c*charge
             out['charged']+=charge
@@ -221,42 +221,45 @@ def plant_checks(bridge,rng,count,tick):
 
 
 def brute_q(prices,load,energy,latch,terminal,p,first_hours=-1.):
-    def recurse(t,e,l):
+    def recurse(t,e,l,paused):
         if t==len(prices):
             return -terminal*(e-p.reserve)
         costs=[]
         for action in (0,1):
-            o=reference(e,l,action,load,p)
-            costs.append(prices[t]*o['grid']+recurse(t+1,o['energy'],bool(o['latched'])))
+            o=reference(e,l,action,load,p,paused)
+            costs.append(prices[t]*o['grid']+recurse(t+1,o['energy'],bool(o['latched']),bool(o['full_paused'])))
         return min(costs)
     q=[]
     for action in (0,1):
         o=reference(energy,latch,action,load,replace(p,dt=first_hours) if first_hours>0 else p)
-        q.append(prices[0]*o['grid']+recurse(1,o['energy'],bool(o['latched'])))
+        q.append(prices[0]*o['grid']+recurse(1,o['energy'],bool(o['latched']),bool(o['full_paused'])))
     return np.array(q)
 
 
 def grid_q(prices,load,energy,latch,terminal,p,nodes=101,first_hours=-1.):
     """Separate float64 Bellman implementation with Python physical transitions."""
-    grid=np.linspace(p.reserve,p.capacity,nodes)
-    dest=np.zeros((2,2,nodes));buy=np.zeros_like(dest);ls=np.zeros_like(dest,dtype=int)
-    for l in (0,1):
+    split=(nodes-1)*4//5
+    grid=(np.linspace(p.reserve,p.capacity,nodes) if p.reserve>=.95*p.capacity else
+          np.concatenate((np.linspace(p.reserve,.95*p.capacity,split+1),
+                          np.linspace(.95*p.capacity,p.capacity,nodes-split)[1:])))
+    dest=np.zeros((4,2,nodes));buy=np.zeros_like(dest);ls=np.zeros_like(dest,dtype=int)
+    for l in range(4):
         for action in (0,1):
             for i,e in enumerate(grid):
-                o=reference(e,bool(l),action,load,p)
-                dest[l,action,i]=o['energy'];buy[l,action,i]=o['grid'];ls[l,action,i]=o['latched']
-    v=np.tile(-terminal*(grid-p.reserve),(2,1))
+                o=reference(e,bool(l&1),action,load,p,bool(l&2))
+                dest[l,action,i]=o['energy'];buy[l,action,i]=o['grid'];ls[l,action,i]=o['latched']+2*o['full_paused']
+    v=np.tile(-terminal*(grid-p.reserve),(4,1))
     for price in reversed(prices[1:]):
-        q=np.empty((2,2,nodes))
-        for l in (0,1):
+        q=np.empty((4,2,nodes))
+        for l in range(4):
             for a in (0,1):
-                continuations=[np.interp(dest[l,a],grid,v[k]) for k in (0,1)]
-                q[l,a]=price*buy[l,a]+np.where(ls[l,a],continuations[1],continuations[0])
+                continuations=np.array([np.interp(dest[l,a],grid,v[k]) for k in range(4)])
+                q[l,a]=price*buy[l,a]+np.take_along_axis(continuations,ls[l,a][None,:],axis=0)[0]
         v=q.min(axis=1)
     q=[]
     for action in (0,1):
         o=reference(energy,latch,action,load,replace(p,dt=first_hours) if first_hours>0 else p)
-        q.append(prices[0]*o['grid']+np.interp(o['energy'],grid,v[o['latched']]))
+        q.append(prices[0]*o['grid']+np.interp(o['energy'],grid,v[o['latched']+2*o['full_paused']]))
     return np.array(q)
 
 
@@ -407,8 +410,10 @@ def runner_artifact_checks(artifact_root, input_path):
     This does not rerun optimization or write artifacts. The Python plant, not
     the core, reconstructs physical state and the available load observations.
     """
-    names=['compact_101','compact_1001','compact_101_float64',
-           'compact_101_high_load','compact_101_idle20W','compact_101_late_publication']
+    metadata_path=artifact_root/'metadata.json'
+    if not metadata_path.exists():
+        return dict(status='PENDING',reason='Runner metadata not available')
+    names=[case['name'] for case in json.loads(metadata_path.read_text())['cases']]
     if not input_path.exists() or any(not (artifact_root/f'{name}.json').exists() or
                                     not (artifact_root/f'{name}.csv').exists() for name in names):
         return dict(status='PENDING',reason='Complete runner artifacts not available')
@@ -430,8 +435,8 @@ def runner_artifact_checks(artifact_root, input_path):
         meta=json.loads((artifact_root/f'{name}.json').read_text())
         trace=pd.read_csv(artifact_root/f'{name}.csv')
         assert len(trace)==last-first
-        p=Config(idle=meta['idle_w']/1000)
-        scale=meta['load_scale'];energy=2.;latch=False;relay=False
+        p=Config(idle=meta['idle_w']/1000,full_pause=int(meta.get('model','legacy')!='legacy'))
+        scale=meta['load_scale'];energy=2.;latch=False;relay=False;paused=False
         observations={};bill=grid=charged=throughput=idle=battery=mains=0.
         transfers=internal=0
         max_error=0.
@@ -442,7 +447,7 @@ def runner_artifact_checks(artifact_root, input_path):
             observed_energy=sum(v[0] for v in eligible);observed_hours=sum(v[1] for v in eligible)
             pred=observed_energy/observed_hours if observed_hours>1e-9 else .06
             assert abs(row.predicted_load_kw-pred)<2e-10, (name,t,'load prediction not prior off-only mean')
-            o=reference(energy,latch,int(row.request),loads[t]*scale,p)
+            o=reference(energy,latch,int(row.request),loads[t]*scale,p,paused)
             check_accounting(o,energy,loads[t]*scale,p)
             assert abs(row.energy_kwh-o['energy'])<2e-8, (name,t,'plant energy')
             assert abs(row.grid_kwh-o['grid'])<2e-8, (name,t,'grid purchase')
@@ -451,7 +456,7 @@ def runner_artifact_checks(artifact_root, input_path):
             max_error=max(max_error,abs(row.energy_kwh-o['energy']))
             transfers+=int(o['first_on']!=relay)+o['internal_transfers']
             internal+=o['internal_transfers']
-            energy=o['energy'];latch=bool(o['latched']);relay=bool(o['last_on'])
+            energy=o['energy'];latch=bool(o['latched']);paused=bool(o['full_paused']);relay=bool(o['last_on'])
             grid+=o['grid'];charged+=o['charged'];throughput+=o['throughput'];idle+=o['idle']
             battery+=o['battery_load'];mains+=o['mains_load'];bill+=o['grid']*prices[t]
             bucket=observations.setdefault(hour,[0.,0.])

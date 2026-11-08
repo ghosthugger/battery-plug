@@ -8,10 +8,10 @@ int main() {
   Solver<101> plain, traced, suffix;
   auto policy=std::make_unique<Policy<101>>();
   // Exhaust the packed-table addressing, including both latches and last bit.
-  for(int t=0;t<MAX_HORIZON;++t) for(int l=0;l<2;++l) for(int i=0;i<101;++i)
+  for(int t=0;t<MAX_HORIZON;++t) for(int l=0;l<4;++l) for(int i=0;i<101;++i)
     policy->set(t,l,i,(t+l+i)%2);
-  for(int t=0;t<MAX_HORIZON;++t) for(int l=0;l<2;++l) for(int i=0;i<101;++i)
-    assert(policy->action(t,l,p.reserve+(p.capacity-p.reserve)*i/100,p)==(t+l+i)%2);
+  for(int t=0;t<MAX_HORIZON;++t) for(int l=0;l<4;++l) for(int i=0;i<101;++i)
+    assert(policy->action(t,l&1,EnergyGrid<101>::at(i,p),p,(l&2)!=0)==(t+l+i)%2);
   // Merely requesting display data must never change the live decision or Qs.
   for(int scenario=0;scenario<100;++scenario) {
     int count=1+scenario%99;
@@ -24,21 +24,21 @@ int main() {
   }
   constexpr int count=36;
   for(int i=0;i<count;++i) traced.prices[i]=(i>=8&&i<16)?.1f:10.f;
-  double energy=.9; bool latch=false;
+  double energy=.9; bool latch=false,full_paused=false;
   int first=traced.choose(p,count,.1,energy,latch,0,.1,1./3600,policy.get());
   assert(first==0);
   unsigned cheap_on=0,expensive_on=0,differences=0;
   int previous=0;
   for(int t=0;t<count;++t) {
-    int action=t?policy->action(t,latch,energy,p):first;
+    int action=t?policy->action(t,latch,energy,p,full_paused):first;
     for(int i=t;i<count;++i) suffix.prices[i-t]=traced.prices[i];
-    int oracle=suffix.choose(p,count-t,.1,energy,latch,previous,.1,t?.25:1./3600);
+    int oracle=suffix.choose(p,count-t,.1,energy,latch,previous,.1,t?.25:1./3600,nullptr,full_paused);
     differences+=action!=oracle;
     Config step=p;if(!t)step.dt=1./3600;
-    auto o=advance(energy,latch,action,.1,step);
+    auto o=advance(energy,latch,action,.1,step,full_paused);
     if(o.on_hours>0) (t>=8&&t<16?cheap_on:expensive_on)++;
     assert(o.energy>=p.reserve-1e-8 && o.energy<=p.capacity+1e-8);
-    energy=o.energy;latch=o.latched;previous=o.last_on;
+    energy=o.energy;latch=o.latched;full_paused=o.full_paused;previous=o.last_on;
   }
   assert(cheap_on>0 && expensive_on==0);
   // An off request still predicts mandatory low-battery recovery physically.

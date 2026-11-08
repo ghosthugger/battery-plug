@@ -113,7 +113,7 @@ int main() {
  week.price_estimates(hour+168*3600,prices.data(),prices.size(),median,lower);
  assert(median==83.5f&&lower==41.75f);
  compact::Config cfg;compact::Solver<101> solver;
- assert(sizeof(solver)<8*1024);
+ assert(sizeof(solver)<16*1024);
  solver.prices[0]=10;solver.prices[1]=.1;
  // Short first slot is handled explicitly, without pretending 15 min remains.
  auto a=compact::advance(.41,false,0,.1,cfg);

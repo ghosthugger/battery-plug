@@ -174,3 +174,28 @@ soak is not considered complete merely because short acceptance tests pass.
 - Full-to-95% live operation and latch persistence across a later restart remain
   unobserved; native tests cover controller behavior with a restored latch.
   Local deployment logs/status evidence are under `.esphome/full-pause-*`.
+
+## Full-charge physical model correction — 2026-11-08
+
+- Corrected both solver transitions and projected schedule to include the actual
+  full/95% latch, with recovery independent and authoritative. Actual starting
+  pause state is passed into the solver. Full is a modeled mains-disconnect event,
+  including a partial interval; there is no sustained mains-only state at full.
+- All nine native executables passed ASan/UBSan, including 400 independently
+  sampled physical comparisons, zero-load/full and high-reserve cases.
+  Independent Python checks passed 502 plant cases, 516 exhaustive short-horizon
+  solver cases, price/load causality checks, and all 53,016 historical intervals
+  across six corrected sensitivity traces. Desktop/mobile fixtures passed.
+- Same 92-day saved price/load fixture and inventory settlement: old optimiser
+  on paused plant saved 36.22685 SEK; corrected 101-node model saved 40.39763 SEK.
+  Within-interval transfers fell from 258 to 32; total transfers from 834 to 824.
+  1001-node saving 40.32618 SEK; float64 reproduced the base trajectory.
+  These are synthetic-load modeled savings, not measured household savings.
+- Replay of the captured 8 November 11:23 snapshot (95.7%, predicted 73.6 W,
+  price 193.0928 ore/kWh) changed the first request from charge to wait.
+- A first uniform-grid candidate exceeded the existing exhaustive-regret limit
+  near full; the final grid concentrates resolution above 95%, keeping the
+  predeclared tolerances and same 101-node budget. Final worst first-action
+  regret was 0.03249 SEK in the 516 finite short-horizon test cases.
+- Pinned ESPHome build passed; static RAM 162,214 bytes. Solver/projection
+  temporary memory is now 29,294 bytes combined. Deployment checks follow.

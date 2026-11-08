@@ -241,21 +241,21 @@ void Controller::update_optimizer_(const Inputs& in) {
   double terminal=std::max(0.f,continuation_ore_+optimizer_settings_.marginal_adder)/100/p.eta_c;
   auto policy=std::unique_ptr<compact::Policy<101>>(new(std::nothrow) compact::Policy<101>);
   optimizer_request_=solver->choose(p,count,predicted_load_w_/1000,in.soc*p.capacity/100,
-      control_.reserve_active,relay_->state?1:0,terminal,(optimizer_until_-in.now)/3600.,policy.get())==1;
+      control_.reserve_active,relay_->state?1:0,terminal,(optimizer_until_-in.now)/3600.,policy.get(),control_.full_charge_paused)==1;
   optimizer_ready_=true;
   if(optimizer_request_) plan_.seconds[plan_.current]=optimizer_until_-in.now;
   if(policy) {
     // Forward simulation of the saved grid policy. Later actions use the nearest
     // SOC node, so these are provisional, not a committed continuous-state path.
     double energy=in.soc*p.capacity/100;
-    bool latch=control_.reserve_active;
+    bool latch=control_.reserve_active,full_paused=control_.full_charge_paused;
     for(int t=0;t<published;++t) {
-      int request=t==0?int(optimizer_request_):policy->action(t,latch,energy,p);
+      int request=t==0?int(optimizer_request_):policy->action(t,latch,energy,p,full_paused);
       auto step=p;
       if(t==0) step.dt=(optimizer_until_-in.now)/3600.;
-      auto outcome=compact::advance(energy,latch,request,predicted_load_w_/1000,step);
+      auto outcome=compact::advance(energy,latch,request,predicted_load_w_/1000,step,full_paused);
       projected_mains_[plan_.current+t]=uint16_t(std::clamp(std::lround(outcome.on_hours*3600),0L,900L));
-      energy=outcome.energy;latch=outcome.latched;
+      energy=outcome.energy;latch=outcome.latched;full_paused=outcome.full_paused;
     }
     projection_ready_=true;
   }
@@ -856,7 +856,7 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            "\"fetching\":%s,\"price_error\":\"%s\",\"storage_ok\":%s,\"free_heap\":%u,\"largest_block\":%u,"
            "\"min_heap\":%u,\"min_block\":%u,\"uptime\":%u,\"history_days\":%u,"
            "\"reserve_threshold\":%.1f,\"reserve_recovery\":%.1f,\"reserve_active\":%s,"
-           "\"full_charge_paused\":%s,\"full_charge_resume\":95,\"algorithm\":\"compact-mpc-v2\",\"optimizer_ready\":%s,\"decision_until\":%u,"
+           "\"full_charge_paused\":%s,\"full_charge_resume\":95,\"algorithm\":\"compact-mpc-v3\",\"optimizer_ready\":%s,\"decision_until\":%u,"
            "\"forecast_price\":%.3f,\"continuation_price\":%.3f,\"predicted_load_w\":%.2f,"
            "\"marginal_adder\":%.2f,\"charge_efficiency\":%.3f,\"discharge_efficiency\":%.3f,"
            "\"idle_w\":%.2f,\"fallback_load_w\":%.2f,\"optimizer_ms\":%u,\"optimizer_bytes\":%u,"

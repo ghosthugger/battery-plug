@@ -13,7 +13,7 @@ with sync_playwright() as p:
   page.on('pageerror',lambda e:errors.append(str(e)))
   page.goto(base+'/charging/api/status')
   status=json.loads(page.locator('body').inner_text())
-  assert status['algorithm']=='compact-mpc-v2'
+  assert status['algorithm']=='compact-mpc-v3'
   page.goto(base+'/charging')
   page.wait_for_function("document.querySelector('#soc').textContent.includes('%')",timeout=20000)
   page.wait_for_function("document.querySelectorAll('svg').length===6",timeout=20000)

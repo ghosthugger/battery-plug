@@ -15,7 +15,7 @@ state = dict(now=NOW, mode='auto', reason='Waiting for cheaper electricity', rel
              horizon=NOW+40000, estimated_finish=NOW+36000, achievable=90, unlikely=False,
              provisional=True, load_w=42, fetching=False, price_error='', storage_ok=True,
              free_heap=100000, largest_block=50000, min_heap=90000, min_block=45000,
-             uptime=3600, history_days=180, reserve_threshold=5, reserve_recovery=10, reserve_active=False, algorithm='compact-mpc-v2', optimizer_ready=True, decision_until=NOW+900, forecast_price=80, continuation_price=45, predicted_load_w=65, marginal_adder=70, charge_efficiency=.9, discharge_efficiency=.9, idle_w=10, fallback_load_w=60, optimizer_ms=90, optimizer_bytes=7680)
+             uptime=3600, history_days=180, reserve_threshold=5, reserve_recovery=10, reserve_active=False, algorithm='compact-mpc-v3', optimizer_ready=True, decision_until=NOW+900, forecast_price=80, continuation_price=45, predicted_load_w=65, marginal_adder=70, charge_efficiency=.9, discharge_efficiency=.9, idle_w=10, fallback_load_w=60, optimizer_ms=90, optimizer_bytes=7680)
 history = [dict(time=NOW-86400+i*300, soc=50+i/10, soc_min=50+i/10, soc_max=51+i/10,
                 power=400 if i%20<10 else 0, on_seconds=300 if i%20<10 else 0, coverage=300,
                 price=50+i%80, ceiling=100, energy_kwh=.033 if i%20<10 else 0,

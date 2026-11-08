@@ -12,10 +12,12 @@ template<int N,typename Real> int run(int argc,char** argv) {
  int first=std::stoi(argv[2]),last=std::stoi(argv[3]);double settle=std::stod(argv[4]);
  double scale=std::stod(argv[5]);bool observed=std::stoi(argv[6]);
  compact::Config p;p.idle=std::stod(argv[7]);
+ int model=argc==12?std::stoi(argv[11]):2;
+ p.full_pause=model!=0;auto prediction=p;prediction.full_pause=model==2;
  compact::Solver<N,Real> solver;std::array<Observed,168> observations{};
  double e=2,bill=0,grid=0,charged=0,thru=0,idle=0,batteryload=0,mainsload=0;
  double min_soc=50,max_soc=50,pred_error=0,solve_s=0,max_solve=0;
- uint64_t changes=0,internals=0,recovery_slots=0;int prev_request=0;bool latch=false,relay=false;
+ uint64_t changes=0,internals=0,recovery_slots=0;int prev_request=0;bool latch=false,relay=false,full_paused=false;
  std::ofstream trace(argv[10]);trace<<"time,energy_kwh,relay,request,latch,grid_kwh,cost_sek,predicted_load_kw,battery_load_kwh,mains_load_kwh,idle_kwh\n";
  for(int t=first;t<last;++t) {
    double sum=0,hours=0;uint32_t h=r[t].at/3600;
@@ -25,12 +27,12 @@ template<int N,typename Real> int run(int argc,char** argv) {
    assert(count>0 && count<=compact::MAX_HORIZON);
    for(int j=t;j<stop;++j) solver.prices[j-t]=Real(j<known?r[j].price:r[t].tail);
    auto before=std::chrono::steady_clock::now();
-   int a=solver.choose(p,count,pred,e,latch,prev_request,r[t].terminal);
+   int a=solver.choose(prediction,count,pred,e,latch,prev_request,r[t].terminal,-1,nullptr,full_paused);
    double sec=std::chrono::duration<double>(std::chrono::steady_clock::now()-before).count();
    solve_s+=sec;max_solve=std::max(max_solve,sec);
-   auto o=compact::advance(e,latch,a,r[t].load*scale,p);
+   auto o=compact::advance(e,latch,a,r[t].load*scale,p,full_paused);
    changes+=(o.first_on!=relay)+o.internal_transfers;internals+=o.internal_transfers;
-   relay=o.last_on;prev_request=o.last_on?1:0;latch=o.latched;e=o.energy;
+   relay=o.last_on;prev_request=o.last_on?1:0;latch=o.latched;full_paused=o.full_paused;e=o.energy;
    if(latch)++recovery_slots;
    min_soc=std::min(min_soc,e*25);max_soc=std::max(max_soc,e*25);
    bill+=o.grid*r[t].price;grid+=o.grid;charged+=o.charged;thru+=o.throughput;idle+=o.idle;
@@ -54,7 +56,7 @@ template<int N,typename Real> int run(int argc,char** argv) {
  return 0;
 }
 int main(int argc,char**argv) {
- if(argc!=11) return 2;
+ if(argc!=11 && argc!=12) return 2;
  int n=std::stoi(argv[8]);bool dbl=std::stoi(argv[9]);
  #define CASE(N) case N:return dbl?run<N,double>(argc,argv):run<N,float>(argc,argv)
  switch(n) {CASE(101);CASE(201);CASE(401);CASE(601);CASE(1001);default:return 3;}

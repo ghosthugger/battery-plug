@@ -8,6 +8,9 @@ import argparse
 parser=argparse.ArgumentParser(description='Offline historical backtest; never accesses the plug')
 parser.add_argument('--input',type=Path,default=P.parent/'tests/backtest/se3-fridge-freezer-input.csv')
 parser.add_argument('--output',type=Path,default=P.parent/'.esphome/optimizer-backtest')
+parser.add_argument('--model',choices=['legacy','mismatch','full-pause'],default='full-pause',
+                    help='legacy: old model/plant; mismatch: old model with 95%% physical pause; full-pause: corrected model/plant')
+parser.add_argument('--case',action='append',help='Run only a named case (repeatable)')
 args=parser.parse_args()
 source=args.input.resolve(); r=pd.read_csv(source,index_col=0,parse_dates=True)
 r.index=pd.to_datetime(r.index,utc=True).as_unit('ns')
@@ -53,10 +56,12 @@ cases=[('compact_101',101,0,1,.01,795,'bounded',1),
        ('compact_101_late_publication',101,0,1,.01,900,'bounded',1),
        ('compact_101_ideal_load_observability',101,0,1,.01,795,'bounded',0),
        ('compact_101_original_forecast',101,0,1,.01,795,'original',1)]
+if args.case: cases=[case for case in cases if case[0] in args.case]
+if not cases: raise SystemExit("No matching cases")
 def run(case):
     name,n,dbl,scale,idle,pub,forecast,observed=case
-    cmd=[str(P/'replay'),str(prepared[pub,forecast]),str(first),str(last),str(settle),str(scale),str(observed),str(idle),str(n),str(dbl),str(P/f'{name}.csv')]
-    begun=time.time();result=json.loads(subprocess.check_output(cmd,text=True));result.update(name=name,publication_minutes=pub,forecast=forecast,wall_seconds=time.time()-begun)
+    cmd=[str(P/'replay'),str(prepared[pub,forecast]),str(first),str(last),str(settle),str(scale),str(observed),str(idle),str(n),str(dbl),str(P/f'{name}.csv'),str({'legacy':0,'mismatch':1,'full-pause':2}[args.model])]
+    begun=time.time();result=json.loads(subprocess.check_output(cmd,text=True));result.update(model=args.model,name=name,publication_minutes=pub,forecast=forecast,wall_seconds=time.time()-begun)
     (P/f'{name}.json').write_text(json.dumps(result,indent=2));print(json.dumps(result),flush=True);return result
 with ThreadPoolExecutor(max_workers=3) as pool:results=list(pool.map(run,cases))
 pd.DataFrame(results).to_csv(P/'summary.csv',index=False)

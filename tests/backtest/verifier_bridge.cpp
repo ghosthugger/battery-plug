@@ -7,7 +7,7 @@
 static compact::Config config() {
   compact::Config p;
   std::cin >> p.capacity >> p.reserve >> p.recovery >> p.charge
-           >> p.eta_c >> p.eta_d >> p.idle >> p.dt;
+           >> p.eta_c >> p.eta_d >> p.idle >> p.dt >> p.full_pause;
   return p;
 }
 
@@ -35,6 +35,7 @@ int main() {
         << ",\"charged\":" << o.charged << ",\"battery_load\":" << o.battery_load
         << ",\"mains_load\":" << o.mains_load << ",\"idle\":" << o.idle
         << ",\"throughput\":" << o.throughput << ",\"on_hours\":" << o.on_hours
+        << ",\"full_paused\":" << int(o.full_paused)
         << ",\"latched\":" << int(o.latched) << ",\"first_on\":" << int(o.first_on)
         << ",\"last_on\":" << int(o.last_on)
         << ",\"internal_transfers\":" << o.internal_transfers << "}\n";
