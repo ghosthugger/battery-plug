@@ -199,3 +199,16 @@ soak is not considered complete merely because short acceptance tests pass.
   regret was 0.03249 SEK in the 516 finite short-horizon test cases.
 - Pinned ESPHome build passed; static RAM 162,214 bytes. Solver/projection
   temporary memory is now 29,294 bytes combined. Deployment checks follow.
+
+- Deployed source `56b5e25` with Terminal curl `/update`, response
+  `Update Successful!`. `compact-mpc-v3` is confirmed live. At uptime 51 seconds,
+  fresh BMS/meter, zero alarms, connected BLE, ready optimiser and healthy NVS;
+  Automatic chose waiting/mains off at SOC 97.7%. Existing settings were checked
+  unchanged. Solve 553 ms, free heap 74,920 bytes, recovered largest block
+  45,056 bytes; minimum heap 43,504 bytes and minimum block 15,872 bytes during
+  startup/temporary allocations. No allocation failure observed in this sample.
+- Live headless Chrome still fails with ERR_ADDRESS_UNREACHABLE, even launched
+  through Terminal; live verification used Terminal curl. Desktop/mobile fixture
+  tests passed. No complete post-deployment full-to-95% cycle or long soak is
+  claimed. Image hash and before/after evidence are committed in
+  `tests/backtest/full-pause-model-deployment.json`.
