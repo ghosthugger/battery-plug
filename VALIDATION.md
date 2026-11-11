@@ -227,3 +227,17 @@ soak is not considered complete merely because short acceptance tests pass.
   sample pricing; no second VAT multiplication is applied to this setting.
   Raw before/after status and savings remain locally under
   `.esphome/invoice-tariff-*`. Rate derivation is documented in TARIFF_MODEL.md.
+
+## Supplier invoice update — 2026-11-11
+
+- Kärnfull September bill lists per-kWh markup 3.20 and variable costs 5.29
+  excluding VAT, with 25% VAT charged at subtotal. Decimal arithmetic confirms
+  10.6125 öre/kWh including VAT, plus Ellevio's 71 = 81.6125. Applied 81.6
+  at existing dashboard precision. The monthly 31.20 ex VAT / 39.00 incl VAT
+  fee is excluded; the invoice's averaged spot row is not added a second time.
+- Successful API response and readback 81.60, healthy storage, ready optimiser;
+  unrelated settings and fixed stored-energy reference checked unchanged.
+  No firmware change/restart. Local evidence: `.esphome/supplier-tariff-*`.
+- Invoice label “Rörligt inköpspris” does not establish personal interval billing;
+  confirmation requested from the customer. Retained existing spot-cadence
+  assumption while applying independently established per-kWh supplier charges.

@@ -401,6 +401,6 @@ uv tool run --with numpy --with pandas python tests/backtest/verify_optimizer.py
 ## Invoice-based electricity charges
 
 The running plug's VAT-inclusive extra variable charges were updated to
-**71.00 öre/kWh** on 11 November 2026, using the supplied Ellevio bill.
+**81.60 öre/kWh** on 11 November 2026, using the supplied Ellevio and Kärnfull bills.
 See [TARIFF_MODEL.md](TARIFF_MODEL.md) for tax/VAT calculation, excluded fixed
-fees, supplier-markup assumptions and how the setting is applied.
+fees, supplier charges, the pending billing-cadence confirmation and how the setting is applied.
