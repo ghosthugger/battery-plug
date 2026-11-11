@@ -241,3 +241,16 @@ soak is not considered complete merely because short acceptance tests pass.
 - Invoice label “Rörligt inköpspris” does not establish personal interval billing;
   confirmation requested from the customer. Retained existing spot-cadence
   assumption while applying independently established per-kWh supplier charges.
+
+## Current app fees and confirmed quarter-hour contract — 2026-11-11
+
+- App screenshot confirms active “Rörligt avtal kvartspris”, resolving the
+  interval-billing question. Its explicit contract type matches the 15-minute
+  optimiser even though the general explanatory paragraph still says hourly.
+- Current app fee components 0.30 + 0.91 + 2.25 + 1.87 + 0.80 total 6.13
+  öre/kWh, replacing September's 5.29. Applied the invoice's pre-VAT treatment
+  (app markup 3.20 matches the pre-VAT invoice line):
+  `71 + (3.20 + 6.13) × 1.25 = 82.6625`, rounded to 82.7 at UI precision.
+- API response succeeded; live readback 82.70, healthy NVS and ready optimiser.
+  Other model/recovery settings and fixed inventory reference verified unchanged.
+  Local before/after evidence: `.esphome/app-tariff-*`. No firmware change/reboot.
