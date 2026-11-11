@@ -397,3 +397,10 @@ uv tool run --with numpy --with pandas python tools/backtest_optimizer.py --case
 uv tool run --with numpy --with pandas python tools/backtest_optimizer.py --case compact_101 --case compact_1001 --case compact_101_float64 --case compact_101_high_load --case compact_101_idle20W --case compact_101_late_publication --model full-pause --output .esphome/full-pause-model-backtest/corrected
 uv tool run --with numpy --with pandas python tests/backtest/verify_optimizer.py --artifacts .esphome/full-pause-model-backtest/corrected
 ```
+
+## Invoice-based electricity charges
+
+The running plug's VAT-inclusive extra variable charges were updated to
+**71.00 öre/kWh** on 11 November 2026, using the supplied Ellevio bill.
+See [TARIFF_MODEL.md](TARIFF_MODEL.md) for tax/VAT calculation, excluded fixed
+fees, supplier-markup assumptions and how the setting is applied.

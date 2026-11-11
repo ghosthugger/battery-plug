@@ -212,3 +212,18 @@ soak is not considered complete merely because short acceptance tests pass.
   tests passed. No complete post-deployment full-to-95% cycle or long soak is
   claimed. Image hash and before/after evidence are committed in
   `tests/backtest/full-pause-model-deployment.json`.
+
+## Invoice-based tariff update — 2026-11-11
+
+- Supplied Ellevio invoice unit rates are already VAT-inclusive: transmission
+  26.00 + energy tax 45.00 = 71.00 öre/kWh. Independently checked equivalent
+  pre-VAT calculation `(20.80 + 36.00) × 1.25`. Existing spot conversion already
+  includes VAT. Fixed 740 kr/month is excluded from marginal charging decisions.
+- Applied only `marginal_adder=71` through the settings API; successful response
+  and live readback confirm 71.00, healthy NVS and ready optimiser. Operating
+  mode, capacity, charger, efficiencies, reserve thresholds and stored-energy
+  reference were checked unchanged. No firmware build, upload or restart needed.
+- Source inspection confirms the same add-on feeds both solver and savings
+  sample pricing; no second VAT multiplication is applied to this setting.
+  Raw before/after status and savings remain locally under
+  `.esphome/invoice-tariff-*`. Rate derivation is documented in TARIFF_MODEL.md.
