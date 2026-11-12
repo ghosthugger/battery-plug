@@ -254,3 +254,20 @@ soak is not considered complete merely because short acceptance tests pass.
 - API response succeeded; live readback 82.70, healthy NVS and ready optimiser.
   Other model/recovery settings and fixed inventory reference verified unchanged.
   Local before/after evidence: `.esphome/app-tariff-*`. No firmware change/reboot.
+
+## Savings and Bluetooth explanations — 2026-11-12
+
+- Clarified same-period direct-mains and metered-grid costs, net stored-energy
+  adjustment versus total current inventory value, fixed reference versus actual
+  charging prices, signs and cancellation. Included −0.84 kr / 1.72 kr per kWh
+  example (about 0.49 kWh net withdrawn). No accounting/control changes.
+- Included previously committed Bluetooth button disabled-state explanations
+  (`2831329`), particularly selecting Always charging when mains is off.
+- Desktop/mobile fixtures and pinned ESPHome build passed. Deployed source
+  `f9d9218` through Terminal web OTA; response `Update Successful!`.
+  OTA SHA256 `fc637b107db4fe403c14e6621352a47ae10ef2656f1bee856e75fa1f3a047955`.
+- Read back and decompressed the actual installed HTML: exact match with source
+  and both explanations present. Fresh BMS/meter, zero alarms, ready optimiser,
+  healthy storage. Existing mode, 3.5 kWh capacity, 82.7-öre tariff and remaining
+  model/recovery settings unchanged. Savings start time, inventory reference and
+  retained daily keys preserved. Local evidence: `.esphome/ui-explanations-*`.
