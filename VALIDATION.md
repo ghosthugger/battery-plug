@@ -181,7 +181,7 @@ soak is not considered complete merely because short acceptance tests pass.
   full/95% latch, with recovery independent and authoritative. Actual starting
   pause state is passed into the solver. Full is a modeled mains-disconnect event,
   including a partial interval; there is no sustained mains-only state at full.
-- All nine native executables passed ASan/UBSan, including 400 independently
+- All eight native executables passed ASan/UBSan, including 400 independently
   sampled physical comparisons, zero-load/full and high-reserve cases.
   Independent Python checks passed 502 plant cases, 516 exhaustive short-horizon
   solver cases, price/load causality checks, and all 53,016 historical intervals
@@ -278,7 +278,7 @@ soak is not considered complete merely because short acceptance tests pass.
   estimate to configured reserve, countdown and Resume automatic. Starts select
   Automatic; either mode button cancels. Deadline persisted independently in NVS.
   Low-battery recovery cancels the timer and keeps its existing recovery latch.
-- All ten native executables passed ASan/UBSan, including new postponement tests
+- All nine native executables passed ASan/UBSan, including new postponement tests
   for immediate stop/cooldown, expiry, recovery override/cancellation, restored
   deadline, pre-NTP startup/recovery, fault/data guards, mode/cancel semantics,
   duration limits and loss-adjusted runtime. Desktop/mobile fixtures passed with
@@ -287,3 +287,18 @@ soak is not considered complete merely because short acceptance tests pass.
   Future economic projections are suppressed while manually postponed. Static
   RAM increased by eight bytes; new state is one UTC deadline plus NVS metadata.
   Deployment verification follows.
+
+- Deployed source `410d142` through Terminal web OTA, response
+  `Update Successful!`; installed dashboard exactly matches source. Final
+  application 1,607,956 bytes; static RAM 162,222 bytes. New API returns valid
+  complete JSON with deadline/countdown and a 34.679-hour runtime estimate.
+- Live test rejected six malformed/out-of-range durations (400), started a
+  15-minute pause with mains off and POSTPONED reason, and confirmed projection
+  suppression. An actual native Restart retained the exact UTC deadline and
+  resumed the pause. Cancellation and selecting Automatic both cleared it.
+  Test cleanup left Automatic with no timer; existing full-charge pause remains.
+- Existing model/capacity/tariff/recovery settings checked unchanged. Fresh
+  BMS/meter, ready optimiser, zero BMS alarms and healthy NVS after the checks.
+  Low-battery takeover and timer expiry were tested natively with simulated
+  readings/time; the live battery was not deliberately depleted. Audit evidence:
+  `tests/backtest/postpone-deployment.json`; detailed logs `.esphome/postpone-*`.
