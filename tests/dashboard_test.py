@@ -6,7 +6,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 NOW = 1793520000
-state = dict(now=NOW, mode='auto', reason='Waiting for cheaper electricity', relay=False, soc=72.3, voltage=13.2,
+state = dict(postpone_until=0, postpone_remaining=0, battery_runtime_hours=20., now=NOW, mode='auto', reason='Waiting for cheaper electricity', relay=False, soc=72.3, voltage=13.2,
              current=-3.1, power=0, price=75, temp_min=18, temp_max=20, cell_min=3.29,
              charge_allowed=True, bluetooth_connected=True, bluetooth_handoff='idle', bluetooth_remaining=0,
              cell_max=3.31, alarms='0000000000000000', bms_fresh=True, bms_age=1,
@@ -42,8 +42,15 @@ def route(request):
         state.update(bluetooth_handoff='paused' if action=='disconnect' else 'reconnecting',
                      bluetooth_remaining=300 if action=='disconnect' else 45)
         answer={'ok':True}
+    elif endpoint=='postpone':
+        minutes=int(parse_qs(request.request.post_data)['minutes'][0])
+        assert minutes==0 or 15<=minutes<=1440
+        state.update(postpone_until=NOW+minutes*60 if minutes else 0,
+                     postpone_remaining=minutes*60,mode='auto',relay=False,
+                     reason='Charging postponed: running on battery' if minutes else 'Waiting for cheaper electricity')
+        answer={'ok':True}
     elif endpoint=='mode':
-        state['mode']=parse_qs(request.request.post_data)['mode'][0];answer={'ok':True}
+        state['mode']=parse_qs(request.request.post_data)['mode'][0];state.update(postpone_until=0,postpone_remaining=0);answer={'ok':True}
     else:answer={'status':state,'history':history,'days':days,'schedule':schedule,'events':[], 'savings':{'started_at':NOW-86400, 'reference_kr':1.5, 'days':[{'day':int(NOW/86400)-1,'known_seconds':86400,'missing_seconds':0,'baseline_kr':5,'grid_kr':3,'inventory_kr':-1,'savings_kr':1}, {'day':int(NOW/86400),'known_seconds':3600,'missing_seconds':600,'baseline_kr':.5,'grid_kr':1,'inventory_kr':.2,'savings_kr':-.3}]}}.get(endpoint,{})
     request.fulfill(body=json.dumps(answer),content_type='application/json')
 
@@ -72,6 +79,25 @@ with sync_playwright() as p:
         assert page.locator('#longHistory').is_visible()==(state['history_days']>0)
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         assert str(int(state['reserve_recovery']))+'%' in page.locator('#reserveInfo').inner_text()
+        # Timed postponement is separate from persistent operating modes.
+        assert page.locator('#postponeHours').input_value()=='5'
+        assert '20.0 hours' in page.locator('#postponeInfo').inner_text()
+        page.locator('#postponeStart').click()
+        page.wait_for_function("document.querySelector('#postponeInfo').textContent.includes('Charging postponed until')")
+        assert state['postpone_remaining']==18000 and state['relay'] is False
+        assert not page.locator('#postponeCancel').is_disabled()
+        page.locator('#postponeCancel').click()
+        page.wait_for_function("document.querySelector('#postponeCancel').disabled")
+        assert state['postpone_until']==0 and state['mode']=='auto'
+        page.locator('#postponeHours').fill('24')
+        assert 'exceeds estimated runtime' in page.locator('#postponeInfo').inner_text()
+        page.locator('#postponeHours').fill('5')
+        state['reserve_active']=True
+        page.evaluate('refresh()')
+        page.wait_for_function("document.querySelector('#postponeStart').disabled")
+        assert 'recovery is active' in page.locator('#postponeInfo').inner_text()
+        state['reserve_active']=False
+        page.evaluate('refresh()')
         page.locator('#reserve_threshold').fill('7')
         page.locator('#reserve_recovery').fill('30')
         page.locator('#marginal_adder').fill('65')

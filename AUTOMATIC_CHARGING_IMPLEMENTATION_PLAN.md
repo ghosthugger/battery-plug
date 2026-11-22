@@ -475,3 +475,38 @@ uv tool run --with numpy --with pandas python tools/backtest_optimizer.py --case
 uv tool run --with numpy --with pandas python tools/backtest_optimizer.py --case compact_101 --case compact_1001 --case compact_101_float64 --case compact_101_high_load --case compact_101_idle20W --case compact_101_late_publication --model full-pause --output .esphome/full-pause-model-backtest/corrected
 uv tool run --with numpy --with pandas python tests/backtest/verify_optimizer.py --artifacts .esphome/full-pause-model-backtest/corrected
 ```
+
+## Manual timed postponement — 2026-11-22
+
+Charging controls include a duration input (default five hours, 15-minute steps,
+maximum 24 hours), **Postpone charging**, and **Resume automatic**. Starting a
+postponement selects Automatic and disconnects mains immediately, overriding
+economic charging requests. The inverter must be enabled for battery operation.
+The UI shows its end time/countdown and estimated hours until the configured
+low-battery threshold, using battery SOC/capacity, the learned appliance load,
+inverter efficiency and inverter idle draw. Requested durations longer than the
+estimate show a warning; estimates are not a guarantee and do not replace the
+actual low-battery override. Existing battery/meter/fault stops still apply.
+
+Reaching the configured low-battery threshold cancels postponement and starts
+normal latched recovery to the configured recovery percentage. Recovery is never
+interrupted by a new postponement. The expired timer does not restart afterwards.
+Expiry, cancellation or selection of either persistent mode releases the manual
+override; Automatic resumes its economic decisions rather than forcing charging.
+A start from Always charging explicitly changes the persistent mode to Automatic.
+
+The UTC deadline is stored as a small independent checksummed NVS record. It
+survives browser reloads and plug restarts; startup waits for a valid clock to
+interpret the deadline, while low-battery recovery can cancel it without a clock.
+Starts require a valid clock, fresh healthy BMS/meter readings, no active phone
+Bluetooth handoff and SOC above the reserve threshold, with recovery inactive.
+Starts/cancellations/expiry/recovery cancellation appear in Recent events.
+Economic future projections are unavailable while the manual deadline exists;
+the price chart and measured history remain available. No new history arrays.
+
+- `POST /charging/api/postpone`: form `minutes=15..1440`, or `minutes=0` to
+  cancel. Rejects malformed/out-of-range values; returns 409 when a start is
+  unavailable. Requests are applied on the main loop and status confirms state.
+- Status adds `postpone_until`, `postpone_remaining` (seconds), and
+  `battery_runtime_hours` (null if unavailable, measured to the reserve threshold).
+- Selecting Automatic or Always charging also cancels the saved deadline.

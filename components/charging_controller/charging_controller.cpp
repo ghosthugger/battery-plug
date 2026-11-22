@@ -115,6 +115,7 @@ void Controller::restore_() {
     reserve_recovery_ = recovery;
   load_record(nvs_, "reserve_active", control_.reserve_active);
   load_record(nvs_, "full_pause", control_.full_charge_paused);
+  load_record(nvs_, "postpone_until", control_.postpone_until);
   uint32_t overcurrent=0;
   if(load_record(nvs_, "overcurrent", overcurrent)) overcurrent_=overcurrent!=0;
   OptimizerSettings optimizer;
@@ -264,6 +265,7 @@ void Controller::update_optimizer_(const Inputs& in) {
   min_block_=std::min(min_block_,uint32_t(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
 }
 void Controller::persist_settings_() {
+  storage_ok_ &= save_record(nvs_, "postpone_until", control_.postpone_until);
   storage_ok_ &= save_record(nvs_, "overcurrent", uint32_t(overcurrent_));
   storage_ok_ &= save_record(nvs_, "reserve", reserve_threshold_);
   storage_ok_ &= save_record(nvs_, "reserve_end", reserve_recovery_);
@@ -432,11 +434,18 @@ void Controller::tick_() {
         plan_.current=i;plan_.current_price=prices_[i].ore;break;
       }
   }
+  uint32_t was_postpone = control_.postpone_until;
   bool was_reserve = control_.reserve_active;
   bool was_full_pause = control_.full_charge_paused;
   bool desired = control_.evaluate_optimized(settings_, in, plan_, prices_.data(),
       optimizer_ready_ && in.now<optimizer_until_+30,optimizer_request_,reserve_threshold_,reserve_recovery_,
       bms_handoff_.active());
+  if(was_postpone!=control_.postpone_until) {
+    storage_ok_ &= save_record(nvs_, "postpone_until", control_.postpone_until);
+    if(nvs_) storage_ok_ &= nvs_commit(nvs_)==ESP_OK;
+    plan_dirty_=true;
+    log_event_(7,control_.reserve_active?Reason::LOW_BATTERY:Reason::WAITING);
+  }
   if (was_full_pause != control_.full_charge_paused) {
     storage_ok_ &= save_record(nvs_, "full_pause", control_.full_charge_paused);
     plan_dirty_ = true; // Recompute the economic choice on latch changes.
@@ -827,6 +836,36 @@ void Controller::handleRequest(AsyncWebServerRequest* r) {
     });
     r->send(200,"application/json","{\"ok\":true}");return;
   }
+  if (r->method() == HTTP_POST && u == "/charging/api/postpone") {
+    auto raw=r->arg("minutes");
+    uint32_t minutes=0;
+    bool valid=!raw.empty() && raw.length()<=4;
+    for(size_t i=0;valid && i<raw.length();++i) {
+      if(raw[i]<'0' || raw[i]>'9') valid=false;
+      else minutes=minutes*10+unsigned(raw[i]-'0');
+    }
+    if(!valid || !valid_postpone_minutes(minutes)) {
+      r->send(400,"application/json","{\"error\":\"Use minutes=15..1440, or 0 to cancel\"}");return;
+    }
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      auto trial=control_;
+      if((minutes && (bms_handoff_.active() || ota_ || overcurrent_)) ||
+          !trial.request_postpone(inputs_(),minutes,reserve_threshold_,reserve_recovery_)) {
+        r->send(409,"application/json","{\"error\":\"Postponing requires a valid clock, fresh healthy battery and meter readings, and battery above the low-battery limit with recovery inactive. Finish phone Bluetooth access first.\"}");return;
+      }
+    }
+    defer([this,minutes] {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      if(minutes && (bms_handoff_.active() || ota_ || overcurrent_)) return;
+      if(!control_.request_postpone(inputs_(),minutes,reserve_threshold_,reserve_recovery_)) return;
+      plan_dirty_=true;
+      persist_settings_();
+      log_event_(7,minutes?Reason::POSTPONED:Reason::WAITING,float(minutes));
+      tick_();
+    });
+    r->send(200,"application/json","{\"ok\":true}");return;
+  }
   if (r->method() == HTTP_POST && u == "/charging/api/mode") {
     auto mode = r->arg("mode");
     int value = mode == "auto" ? 1 : mode == "always" ? 3 : -1;
@@ -845,7 +884,10 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
   auto in = inputs_();
   auto buffer = std::make_unique<std::array<char, 2700>>();
   auto* b = buffer->data();
-  char soc[24], v[24], a[24], price[24], lo[24], hi[24], minc[24], maxc[24], power[24];
+  char soc[24], v[24], a[24], price[24], lo[24], hi[24], minc[24], maxc[24], power[24], runtime[24];
+  float runtime_hours=battery_runtime_hours(settings_,in,reserve_threshold_,
+      optimizer_history_.load_w(in.now,optimizer_settings_.fallback_load_w),
+      optimizer_settings_.discharge_efficiency,optimizer_settings_.idle_w);
   snprintf(b, buffer->size(),
            "{\"now\":%u,\"mode\":\"%s\",\"reason\":\"%s\",\"relay\":%s,\"soc\":%s,"
            "\"voltage\":%s,\"current\":%s,\"power\":%s,\"price\":%s,\"temp_min\":%s,\"temp_max\":%s,"
@@ -861,7 +903,7 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            "\"marginal_adder\":%.2f,\"charge_efficiency\":%.3f,\"discharge_efficiency\":%.3f,"
            "\"idle_w\":%.2f,\"fallback_load_w\":%.2f,\"optimizer_ms\":%u,\"optimizer_bytes\":%u,"
            "\"charge_mos\":%u,\"discharge_mos\":%u,\"charge_allowed\":%s,\"balancing_status\":%u,"
-           "\"bluetooth_connected\":%s,\"bluetooth_handoff\":\"%s\",\"bluetooth_remaining\":%u}",
+           "\"postpone_until\":%u,\"postpone_remaining\":%u,\"battery_runtime_hours\":%s,\"bluetooth_connected\":%s,\"bluetooth_handoff\":\"%s\",\"bluetooth_remaining\":%u}",
            in.now,
            control_.mode == Mode::ALWAYS ? "always" : "auto",
            reason_text(control_.reason), relay_->state ? "true" : "false",
@@ -887,7 +929,9 @@ void Controller::status_json_(AsyncWebServerRequest* r) {
            double(optimizer_settings_.discharge_efficiency),double(optimizer_settings_.idle_w),
            double(optimizer_settings_.fallback_load_w),optimizer_ms_,unsigned(sizeof(compact::Solver<101>)),
            unsigned(battery_.charge_mos),unsigned(battery_.discharge_mos),battery_.charge_allowed?"true":"false",
-           unsigned(battery_.balancing_status),connected_?"true":"false",
+           unsigned(battery_.balancing_status),control_.postpone_until,
+           control_.postponing(in)?control_.postpone_until-in.now:0,
+           num(runtime_hours,runtime,sizeof(runtime)),connected_?"true":"false",
            bms_handoff_.paused()?"paused":bms_handoff_.active()?"reconnecting":"idle",
            bms_handoff_.remaining_seconds(millis()));
   lock.unlock();  // Never let a slow HTTP client block relay supervision.
@@ -968,10 +1012,10 @@ void Controller::schedule_json_(AsyncWebServerRequest* r) {
     s->now=in.now;s->at=plan_.at;s->horizon=plan_.horizon;
     s->always=control_.mode==Mode::ALWAYS;
     s->healthy=in.clock_ok && in.bms_fresh && in.meter_fresh && !in.fault && !ota_ && !overcurrent_;
-    s->projection=s->healthy && !plan_dirty_ &&
+    s->projection=s->healthy && !control_.postpone_until && !plan_dirty_ &&
         (s->always || (projection_ready_ && optimizer_ready_ && in.now<optimizer_until_));
     s->request=s->always || control_.reserve_active ||
-        (!plan_dirty_ && optimizer_ready_ && in.now<optimizer_until_ && optimizer_request_);
+        (!control_.postpone_until && !plan_dirty_ && optimizer_ready_ && in.now<optimizer_until_ && optimizer_request_);
   }
   begin_json(r);
   if (!chunk(r, "[")) return;

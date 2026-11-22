@@ -271,3 +271,19 @@ soak is not considered complete merely because short acceptance tests pass.
   healthy storage. Existing mode, 3.5 kWh capacity, 82.7-öre tariff and remaining
   model/recovery settings unchanged. Savings start time, inventory reference and
   retained daily keys preserved. Local evidence: `.esphome/ui-explanations-*`.
+
+## Manual charging postponement — 2026-11-22
+
+- Added bounded 15-minute..24-hour postponement with five-hour default, runtime
+  estimate to configured reserve, countdown and Resume automatic. Starts select
+  Automatic; either mode button cancels. Deadline persisted independently in NVS.
+  Low-battery recovery cancels the timer and keeps its existing recovery latch.
+- All ten native executables passed ASan/UBSan, including new postponement tests
+  for immediate stop/cooldown, expiry, recovery override/cancellation, restored
+  deadline, pre-NTP startup/recovery, fault/data guards, mode/cancel semantics,
+  duration limits and loss-adjusted runtime. Desktop/mobile fixtures passed with
+  five-hour submission, cancel, runtime warning and active-recovery guard.
+- No economic solver, BMS commands, tariffs or existing history formats changed.
+  Future economic projections are suppressed while manually postponed. Static
+  RAM increased by eight bytes; new state is one UTC deadline plus NVS metadata.
+  Deployment verification follows.

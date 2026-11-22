@@ -39,7 +39,8 @@ enum class Reason : uint8_t {
   PLANNER,
   ALWAYS,
   BMS_HANDOFF,
-  FULL_PAUSE
+  FULL_PAUSE,
+  POSTPONED
 };
 inline const char* reason_text(Reason r) {
   static const char* names[] = {"Off",
@@ -61,7 +62,8 @@ inline const char* reason_text(Reason r) {
                                 "Waiting for optimiser settings or price data",
                                 "Always charging: mains enabled",
                                 "Phone Bluetooth access: mains held on, live BMS checks paused",
-                                "Full battery: waiting until 95% before charging"};
+                                "Full battery: waiting until 95% before charging",
+                                "Charging postponed: running on battery"};
   return names[static_cast<unsigned>(r)];
 }
 struct Settings {
@@ -383,18 +385,46 @@ inline Plan make_plan(const Settings& s, const Inputs& in, const Price* prices, 
   p.unlikely = remaining > 1 || gain <= 0;
   return p;
 }
+// Minutes are bounded so a postponement can never become a permanent Off mode.
+inline bool valid_postpone_minutes(uint32_t minutes) {
+  return minutes==0 || (minutes>=15 && minutes<=1440);
+}
+inline float battery_runtime_hours(const Settings& s,const Inputs& in,float reserve,
+                                   float predicted_load_w,float eta_d,float idle_w) {
+  if(!in.bms_fresh || !std::isfinite(in.soc) || in.soc<0 || in.soc>100 ||
+     !std::isfinite(predicted_load_w) || predicted_load_w<0 ||
+     !std::isfinite(eta_d) || eta_d<=0 || eta_d>1 ||
+     !std::isfinite(idle_w) || idle_w<0 || !valid_settings(s) ||
+     !std::isfinite(reserve) || reserve<1 || reserve>95) return UNKNOWN;
+  float draw=predicted_load_w/eta_d+idle_w;
+  return draw>0?std::max(0.f,in.soc-reserve)*s.capacity_kwh*10/draw:UNKNOWN;
+}
 class Control {
  public:
   Mode mode{Mode::OFF};
   Reason reason{Reason::OFF};
   bool on{false}, target_latched{false}, reserve_active{false}, full_charge_paused{false};
-  uint32_t last_switch{0}, manual_deadline{0}, cycle_deadline{0};
+  uint32_t last_switch{0}, manual_deadline{0}, cycle_deadline{0}, postpone_until{0};
   bool cycle_met{false};
   void set_mode(Mode value, uint32_t now, const Settings& s) {
     mode = value;
+    postpone_until = 0;
     target_latched = false;
     manual_deadline = value == Mode::NOW ? next_deadline(now, s.hour, s.minute) : 0;
     if (value == Mode::OFF) { on = false; reserve_active = false; }
+  }
+  bool postponing(const Inputs& in) const {
+    return mode==Mode::AUTO && in.clock_ok && postpone_until>in.now;
+  }
+  bool request_postpone(const Inputs& in,uint32_t minutes,float start,float stop) {
+    if(!valid_postpone_minutes(minutes)) return false;
+    if(!minutes) {postpone_until=0;return true;}
+    if(!in.clock_ok || !in.bms_fresh || !in.meter_fresh || in.fault ||
+       !std::isfinite(in.soc) || in.soc<=start || in.soc>100 || reserve_active ||
+       !valid_operating_reserve(start,stop) || in.now>UINT32_MAX-minutes*60) return false;
+    mode=Mode::AUTO;
+    postpone_until=in.now+minutes*60;
+    return true;
   }
   bool evaluate(const Settings& s, const Inputs& in, const Plan& p, const Price* prices,
                 float reserve_threshold = 0, float reserve_recovery = 10) {
@@ -471,6 +501,9 @@ class Control {
       if (in.soc<=start) reserve_active=true;
       else if (in.soc>=stop) reserve_active=false;
     }
+    if(postpone_until && (mode==Mode::ALWAYS || reserve_active ||
+        (in.clock_ok && (in.now>=postpone_until || postpone_until-in.now>86400))))
+      postpone_until=0;
     // Only fresh valid SOC can change the persisted full-charge latch. The
     // captured Daly cell-overvoltage cutoff may precede a 100% SOC report.
     if (in.bms_fresh && std::isfinite(in.soc) && in.soc>=0 && in.soc<=100) {
@@ -487,6 +520,7 @@ class Control {
     else if (in.fault) reason=Reason::FAULT;
     else if (mode==Mode::ALWAYS) {want=true;reason=Reason::ALWAYS;}
     else if (reserve_active) {want=true;reason=Reason::LOW_BATTERY;}
+    else if (postponing(in)) reason=Reason::POSTPONED;
     else if (full_charge_paused) reason=Reason::FULL_PAUSE;
     else if (p.current<0) reason=Reason::PRICE_UNKNOWN;
     else if (!ready) reason=Reason::PLANNER;
